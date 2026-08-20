@@ -172,6 +172,7 @@
 - [x] 验证 stdout 没有非 JSON 字节。
 - [x] 验证 token 和 signed URL query 不进入日志。
 - [x] 编写最小 Agent 使用说明和 JSON schema 索引。
+- [x] 验证单次 compact `node get` 同时返回目标子树及其引用的 styles、派生变量和 components，形成零网络的单向 D2C handoff。
 
 P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓存 Figma 文件；除显式 pull 外不存在 Tier 1 路径。
 

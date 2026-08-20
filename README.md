@@ -52,6 +52,19 @@ figstash snapshot prune
 figstash quota status
 ```
 
+For the one-way design-to-code handoff, give the Agent the complete JSON from a
+targeted compact query:
+
+```bash
+figstash node get 'https://www.figma.com/design/FILE_KEY/Name?node-id=2-1'
+```
+
+`data.node` contains the normalized node subtree. `data.references` contains
+the named styles, repeated local design values, components, and component sets
+actually referenced by that subtree. This handoff is fully local after the
+snapshot pull; code generation remains the responsibility of the consuming
+Agent and does not trigger a Figma request.
+
 `snapshot prune` only plans deletion. `snapshot prune --execute` performs the
 reported permanent deletion and never removes the sole snapshot or a current
 HEAD. `snapshot diff` is present as a stable command but returns
