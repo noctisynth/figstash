@@ -169,6 +169,15 @@ fn schema_command_supports_catalog_and_detailed_contract_discovery() {
     assert_eq!(detail["data"]["tier"], 1);
     assert_eq!(detail["meta"]["network"]["attempts"], 0);
 
+    let whoami = run_cli(temporary.path(), &["schema", "auth.whoami"]);
+    assert!(whoami.status.success());
+    let whoami = parse_single_stdout(&whoami);
+    assert_eq!(whoami["data"]["network"], "explicit");
+    assert_eq!(whoami["data"]["endpointClass"], "get_current_user");
+    assert_eq!(whoami["data"]["tier"], 3);
+    assert_eq!(whoami["data"]["writesLocalState"], true);
+    assert_eq!(whoami["meta"]["network"]["attempts"], 0);
+
     let unknown = run_cli(temporary.path(), &["schema", "missing.command"]);
     assert_eq!(unknown.status.code(), Some(2));
     let unknown = parse_single_stdout(&unknown);
@@ -333,6 +342,29 @@ fn environment_token_is_reported_but_never_echoed() {
         include_str!("../../../schemas/cli/v1/auth.status.schema.json"),
         &response["data"],
     );
+}
+
+#[test]
+fn offline_whoami_fails_before_credential_or_network_access() {
+    let temporary =
+        tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+    let output = Command::new(env!("CARGO_BIN_EXE_figstash"))
+        .arg("--data-dir")
+        .arg(temporary.path())
+        .arg("--config-dir")
+        .arg(temporary.path().join("config"))
+        .arg("--log-level")
+        .arg("off")
+        .arg("--offline")
+        .args(["auth", "whoami"])
+        .env_remove("FIGMA_TOKEN")
+        .output()
+        .unwrap_or_else(|error| panic!("offline whoami process failed: {error}"));
+    assert_eq!(output.status.code(), Some(6));
+    let response = parse_single_stdout(&output);
+    assert_eq!(response["error"]["code"], "offline_mode");
+    assert_eq!(response["meta"]["command"], "auth.whoami");
+    assert_eq!(response["meta"]["network"]["attempts"], 0);
 }
 
 #[test]

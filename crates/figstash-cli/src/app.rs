@@ -52,7 +52,7 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
         Command::Context(args) => context_get(config, args),
         Command::Outline(args) => outline_get(config, args),
         Command::Schema(args) => schema_get(args),
-        Command::Auth(auth) => auth_command(&auth.command),
+        Command::Auth(auth) => auth_command(config, cli.offline, &auth.command).await,
         Command::Doctor(args) => doctor(config, cli.offline, args.network).await,
         Command::Quota(quota) => match quota.command {
             QuotaSubcommand::Status => {
@@ -192,7 +192,11 @@ fn schema_get(args: &SchemaArgs) -> AppResult<CommandOutput> {
     }
 }
 
-fn auth_command(command: &AuthSubcommand) -> AppResult<CommandOutput> {
+async fn auth_command(
+    config: &AppConfig,
+    offline: bool,
+    command: &AuthSubcommand,
+) -> AppResult<CommandOutput> {
     let provider = PatProvider::new(SystemKeyring);
     match command {
         AuthSubcommand::Set(args) => {
@@ -236,6 +240,26 @@ fn auth_command(command: &AuthSubcommand) -> AppResult<CommandOutput> {
                 "remoteValidated": false
             }))
         }
+        AuthSubcommand::Whoami => {
+            if offline {
+                return Err(AppError::new(
+                    ErrorCode::OfflineMode,
+                    "Current-user lookup is disabled by `--offline`.",
+                ));
+            }
+            let credential = provider.resolve()?;
+            let store = Store::open(&config.data_dir)?;
+            let stage = store.create_staging_file()?;
+            let transport = ReqwestTransport::new(
+                config.connect_timeout,
+                config.total_timeout,
+                config.inherit_proxy,
+            )?;
+            let gateway = FigmaGateway::new(transport, store, config.maximum_download_bytes);
+            let result = whoami_with_gateway(&gateway, &credential, &stage).await;
+            cleanup_stage(&stage);
+            result
+        }
         AuthSubcommand::Clear => {
             let cleared = provider.clear()?;
             serialize_neutral(json!({
@@ -245,6 +269,27 @@ fn auth_command(command: &AuthSubcommand) -> AppResult<CommandOutput> {
             }))
         }
     }
+}
+
+async fn whoami_with_gateway<T, L>(
+    gateway: &FigmaGateway<T, L>,
+    credential: &Credential,
+    destination: &Path,
+) -> AppResult<CommandOutput>
+where
+    T: FigmaTransport,
+    L: AttemptRecorder,
+{
+    let receipt = gateway.get_current_user(credential, destination).await?;
+    serialize_figma(
+        json!({
+            "credentialKind": credential.kind(),
+            "credentialSource": credential.source(),
+            "remoteValidated": true,
+            "user": receipt.user,
+        }),
+        receipt.network,
+    )
 }
 
 async fn doctor(config: &AppConfig, offline: bool, network: bool) -> AppResult<CommandOutput> {
@@ -504,6 +549,13 @@ fn serialize_neutral(data: impl serde::Serialize) -> AppResult<CommandOutput> {
     CommandOutput::neutral(data).map_err(|error| serialization_error(&error))
 }
 
+fn serialize_figma(
+    data: impl serde::Serialize,
+    network: figstash_core::NetworkUsage,
+) -> AppResult<CommandOutput> {
+    CommandOutput::figma(data, network).map_err(|error| serialization_error(&error))
+}
+
 fn serialization_error(error: &serde_json::Error) -> AppError {
     AppError::new(ErrorCode::Internal, "Failed to serialize command output.")
         .with_detail("reason", json!(error.to_string()))
@@ -536,7 +588,7 @@ fn chrono_like_age(timestamp: i64) -> Option<std::time::Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::download_and_commit;
+    use super::{download_and_commit, whoami_with_gateway};
     use async_trait::async_trait;
     use figstash_core::{CredentialKind, RequestProfile, SnapshotRepository, SnapshotSelector};
     use figstash_figma::{
@@ -549,6 +601,8 @@ mod tests {
     use url::Url;
 
     struct FixtureTransport;
+
+    struct CurrentUserTransport;
 
     #[async_trait]
     impl FigmaTransport for FixtureTransport {
@@ -574,6 +628,77 @@ mod tests {
                 hash: blake3::hash(bytes).to_hex().to_string(),
             })
         }
+    }
+
+    #[async_trait]
+    impl FigmaTransport for CurrentUserTransport {
+        async fn download(
+            &self,
+            url: &Url,
+            endpoint: figstash_core::EndpointClass,
+            credential: &Credential,
+            destination: &Path,
+            _maximum_bytes: u64,
+        ) -> Result<TransportResponse, TransportError> {
+            assert_eq!(url.as_str(), "https://api.figma.com/v1/me");
+            assert_eq!(endpoint, figstash_core::EndpointClass::GetCurrentUser);
+            assert_eq!(credential.kind(), CredentialKind::Pat);
+            let bytes = br#"{"id":"42","handle":"Agent User","email":"agent@example.com","img_url":"https://example.com/avatar.png"}"#;
+            tokio::fs::write(destination, bytes)
+                .await
+                .map_err(|error| {
+                    TransportError::new(figstash_figma::TransportErrorKind::Io, error.to_string())
+                })?;
+            Ok(TransportResponse {
+                status: 200,
+                rate_limit: RateLimitHeaders::default(),
+                size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                hash: blake3::hash(bytes).to_hex().to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_whoami_returns_normalized_identity_and_records_tier_three() {
+        let temporary = tempfile::tempdir()
+            .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+        let store = Store::open(temporary.path())
+            .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
+        let stage = store
+            .create_staging_file()
+            .unwrap_or_else(|error| panic!("staging allocation failed: {error}"));
+        let gateway = FigmaGateway::new(CurrentUserTransport, store.clone(), 64 * 1024);
+        let credential = Credential::personal_access_token("fixture", CredentialSource::Keyring)
+            .unwrap_or_else(|error| panic!("credential failed: {error}"));
+        let output = whoami_with_gateway(&gateway, &credential, &stage)
+            .await
+            .unwrap_or_else(|error| panic!("mock whoami failed: {error}"));
+        assert_eq!(output.source, figstash_core::ResponseSource::Figma);
+        assert_eq!(output.network.attempts, 1);
+        assert_eq!(output.network.tier3, 1);
+        assert_eq!(output.data["credentialKind"], "pat");
+        assert_eq!(output.data["credentialSource"], "keyring");
+        assert_eq!(output.data["remoteValidated"], true);
+        assert_eq!(output.data["user"]["id"], "42");
+        assert_eq!(output.data["user"]["handle"], "Agent User");
+        assert_eq!(
+            output.data["user"]["avatarUrl"],
+            "https://example.com/avatar.png"
+        );
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../schemas/cli/v1/auth.whoami.schema.json"
+        ))
+        .unwrap_or_else(|error| panic!("whoami schema is invalid: {error}"));
+        let validator = jsonschema::validator_for(&schema)
+            .unwrap_or_else(|error| panic!("whoami schema compilation failed: {error}"));
+        validator
+            .validate(&output.data)
+            .unwrap_or_else(|error| panic!("whoami output violates its schema: {error}"));
+        let quota = store
+            .quota_status()
+            .unwrap_or_else(|error| panic!("quota lookup failed: {error}"));
+        assert_eq!(quota.attempted, 1);
+        assert_eq!(quota.succeeded, 1);
     }
 
     #[tokio::test]

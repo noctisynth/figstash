@@ -10,7 +10,7 @@ use figstash_core::{
 use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use reqwest::redirect::Policy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -235,6 +235,38 @@ pub struct DownloadReceipt {
     pub network: NetworkUsage,
 }
 
+/// Normalized identity returned by `GET /v1/me`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentUser {
+    /// Stable Figma user identifier.
+    pub id: String,
+    /// User-visible Figma handle.
+    pub handle: String,
+    /// Email address associated with the authenticated account.
+    pub email: String,
+    /// Profile image URL returned by Figma.
+    pub avatar_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentUserResponse {
+    id: String,
+    handle: String,
+    email: String,
+    img_url: String,
+}
+
+/// Current-user response plus observed network usage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentUserReceipt {
+    /// Authenticated Figma user.
+    pub user: CurrentUser,
+    /// Actual classified request attempts.
+    pub network: NetworkUsage,
+}
+
 /// The only application boundary allowed to issue Figma REST requests.
 pub struct FigmaGateway<T, L> {
     transport: T,
@@ -283,8 +315,9 @@ where
                     "The Figma API URL cannot accept a path.",
                 )
             })?
+            .pop_if_empty()
             .extend(["files", file_key]);
-        {
+        if version.is_some() || profile.geometry == GeometryMode::Paths {
             let mut query = url.query_pairs_mut();
             if let Some(version) = version {
                 query.append_pair("version", version);
@@ -303,6 +336,67 @@ where
             destination,
         )
         .await
+    }
+
+    /// Fetches and validates the current authenticated Figma user.
+    ///
+    /// # Errors
+    ///
+    /// Returns classified auth, scope, policy, network, Figma, ledger, staging, or schema errors.
+    pub async fn get_current_user(
+        &self,
+        credential: &Credential,
+        destination: &Path,
+    ) -> AppResult<CurrentUserReceipt> {
+        let url = Url::parse("https://api.figma.com/v1/me").map_err(|error| {
+            AppError::new(
+                ErrorCode::Internal,
+                "The built-in Figma current-user URL is invalid.",
+            )
+            .with_detail("reason", json!(error.to_string()))
+        })?;
+        let receipt = self
+            .execute_classified(
+                "auth.whoami",
+                EndpointClass::GetCurrentUser,
+                None,
+                None,
+                &url,
+                credential,
+                destination,
+            )
+            .await?;
+        let bytes = tokio::fs::read(destination).await.map_err(|error| {
+            with_network(
+                AppError::new(
+                    ErrorCode::StoreFailed,
+                    "Failed to read the staged current-user response.",
+                )
+                .with_detail("reason", json!(error.to_string())),
+                receipt.network,
+                EndpointClass::GetCurrentUser,
+            )
+        })?;
+        let response: CurrentUserResponse = serde_json::from_slice(&bytes).map_err(|error| {
+            with_network(
+                AppError::new(
+                    ErrorCode::InvalidFigmaResponse,
+                    "Figma returned an invalid current-user response.",
+                )
+                .with_detail("reason", json!(error.to_string())),
+                receipt.network,
+                EndpointClass::GetCurrentUser,
+            )
+        })?;
+        Ok(CurrentUserReceipt {
+            user: CurrentUser {
+                id: response.id,
+                handle: response.handle,
+                email: response.email,
+                avatar_url: response.img_url,
+            },
+            network: receipt.network,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -329,7 +423,8 @@ where
             let completed_at = Utc::now();
             match response {
                 Ok(response) => {
-                    let mapped_error = map_http_error(response.status, &response.rate_limit);
+                    let mapped_error =
+                        map_http_error(response.status, endpoint, &response.rate_limit);
                     self.ledger
                         .record_attempt(&ApiAttempt {
                             started_at,
@@ -429,10 +524,18 @@ fn parse_rate_limit_headers(headers: &reqwest::header::HeaderMap) -> RateLimitHe
     }
 }
 
-fn map_http_error(status: u16, headers: &RateLimitHeaders) -> Option<AppError> {
+fn map_http_error(
+    status: u16,
+    endpoint: EndpointClass,
+    headers: &RateLimitHeaders,
+) -> Option<AppError> {
     let error = match status {
         200..=299 => return None,
         401 => AppError::new(ErrorCode::AuthFailed, "Figma rejected the credential."),
+        403 if endpoint == EndpointClass::GetCurrentUser => AppError::new(
+            ErrorCode::ScopeMissing,
+            "The credential cannot read the current Figma user or lacks `current_user:read`.",
+        ),
         403 => AppError::new(
             ErrorCode::ScopeMissing,
             "The credential cannot read this Figma file or lacks `file_content:read`.",
@@ -489,16 +592,20 @@ fn with_network(error: AppError, network: NetworkUsage, endpoint: EndpointClass)
 #[cfg(test)]
 mod tests {
     use super::{
-        FigmaGateway, FigmaTransport, RateLimitHeaders, TransportError, TransportErrorKind,
-        TransportResponse,
+        FigmaGateway, FigmaTransport, RateLimitHeaders, ReqwestTransport, TransportError,
+        TransportErrorKind, TransportResponse,
     };
     use crate::{Credential, CredentialSource};
     use async_trait::async_trait;
     use figstash_core::{
-        ApiAttempt, AppResult, AttemptRecorder, EndpointClass, ErrorCode, RequestProfile,
+        ApiAttempt, AppResult, AttemptRecorder, EndpointClass, ErrorCode, GeometryMode,
+        RequestProfile,
     };
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use url::Url;
 
     #[derive(Clone)]
@@ -518,6 +625,19 @@ mod tests {
         responses: Mutex<Vec<Result<TransportResponse, TransportError>>>,
     }
 
+    #[derive(Clone)]
+    struct RecordingTransport {
+        urls: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct TemporaryPath(PathBuf);
+
+    impl Drop for TemporaryPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     #[async_trait]
     impl FigmaTransport for MockTransport {
         async fn download(
@@ -533,6 +653,159 @@ mod tests {
                 .unwrap_or_else(|error| panic!("response mutex poisoned: {error}"))
                 .remove(0)
         }
+    }
+
+    #[async_trait]
+    impl FigmaTransport for RecordingTransport {
+        async fn download(
+            &self,
+            url: &Url,
+            _endpoint: EndpointClass,
+            _credential: &Credential,
+            _destination: &Path,
+            _maximum_bytes: u64,
+        ) -> Result<TransportResponse, TransportError> {
+            self.urls
+                .lock()
+                .unwrap_or_else(|error| panic!("URL mutex poisoned: {error}"))
+                .push(url.as_str().to_owned());
+            Ok(response(200))
+        }
+    }
+
+    #[tokio::test]
+    async fn file_endpoint_urls_are_canonical_for_every_request_profile() {
+        let urls = Arc::new(Mutex::new(Vec::new()));
+        let ledger = MemoryLedger(Arc::new(Mutex::new(Vec::new())));
+        let gateway = FigmaGateway::new(RecordingTransport { urls: urls.clone() }, ledger, 1024);
+        let credential = Credential::personal_access_token("secret", CredentialSource::Keyring)
+            .unwrap_or_else(|error| panic!("credential failed: {error}"));
+
+        gateway
+            .get_file(
+                "Abcdef123",
+                None,
+                RequestProfile::default(),
+                &credential,
+                Path::new("unused"),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("default file request failed: {error}"));
+        gateway
+            .get_file(
+                "Abcdef123",
+                Some("42"),
+                RequestProfile::default(),
+                &credential,
+                Path::new("unused"),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("versioned file request failed: {error}"));
+        gateway
+            .get_file(
+                "Abcdef123",
+                None,
+                RequestProfile {
+                    geometry: GeometryMode::Paths,
+                },
+                &credential,
+                Path::new("unused"),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("geometry file request failed: {error}"));
+
+        assert_eq!(
+            *urls
+                .lock()
+                .unwrap_or_else(|error| panic!("URL mutex poisoned: {error}")),
+            [
+                "https://api.figma.com/v1/files/Abcdef123",
+                "https://api.figma.com/v1/files/Abcdef123?version=42",
+                "https://api.figma.com/v1/files/Abcdef123?geometry=paths",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn reqwest_transport_sends_get_with_pat_header_to_exact_path() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap_or_else(|error| panic!("loopback listener failed: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("loopback address failed: {error}"));
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap_or_else(|_| panic!("loopback accept timed out"))
+                .unwrap_or_else(|error| panic!("loopback accept failed: {error}"));
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = socket
+                    .read(&mut buffer)
+                    .await
+                    .unwrap_or_else(|error| panic!("loopback read failed: {error}"));
+                assert!(read > 0, "client closed before sending complete headers");
+                request.extend_from_slice(&buffer[..read]);
+                assert!(
+                    request.len() <= 16 * 1024,
+                    "request headers are unexpectedly large"
+                );
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap_or_else(|error| panic!("loopback response failed: {error}"));
+            String::from_utf8(request)
+                .unwrap_or_else(|error| panic!("request headers were not UTF-8: {error}"))
+        });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let destination = TemporaryPath(std::env::temp_dir().join(format!(
+            "figstash-transport-{}-{unique}.json",
+            std::process::id()
+        )));
+        tokio::fs::File::create(&destination.0)
+            .await
+            .unwrap_or_else(|error| panic!("temporary response file failed: {error}"));
+        let transport =
+            ReqwestTransport::new(Duration::from_secs(5), Duration::from_secs(5), false)
+                .unwrap_or_else(|error| panic!("transport construction failed: {error}"));
+        let credential =
+            Credential::personal_access_token("fixture-token", CredentialSource::Keyring)
+                .unwrap_or_else(|error| panic!("credential failed: {error}"));
+        let url = Url::parse(&format!("http://{address}/v1/files/Abcdef123"))
+            .unwrap_or_else(|error| panic!("loopback URL failed: {error}"));
+
+        let response = transport
+            .download(
+                &url,
+                EndpointClass::GetFile,
+                &credential,
+                &destination.0,
+                1024,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("loopback download failed: {error}"));
+        let request = server
+            .await
+            .unwrap_or_else(|error| panic!("loopback server task failed: {error}"));
+        let lowercase = request.to_ascii_lowercase();
+
+        assert_eq!(response.status, 200);
+        assert!(request.starts_with("GET /v1/files/Abcdef123 HTTP/1.1\r\n"));
+        assert!(lowercase.contains("\r\nx-figma-token: fixture-token\r\n"));
+        assert!(!lowercase.contains("\r\nauthorization:"));
+        assert_eq!(
+            tokio::fs::read(&destination.0)
+                .await
+                .unwrap_or_else(|error| panic!("response read failed: {error}")),
+            b"{}"
+        );
     }
 
     #[tokio::test]
@@ -653,6 +926,35 @@ mod tests {
             .unwrap_or_else(|error| panic!("success failed: {error}"));
         assert_eq!(receipt.network.attempts, 1);
         assert_eq!(ledger_len(&ledger), 1);
+    }
+
+    #[tokio::test]
+    async fn current_user_auth_failures_are_tier_three_and_never_retried() {
+        let credential = Credential::personal_access_token("secret", CredentialSource::Keyring)
+            .unwrap_or_else(|error| panic!("credential failed: {error}"));
+        for (status, expected, message_fragment) in [
+            (401, ErrorCode::AuthFailed, "rejected"),
+            (403, ErrorCode::ScopeMissing, "current_user:read"),
+        ] {
+            let ledger = MemoryLedger(Arc::new(Mutex::new(Vec::new())));
+            let gateway = FigmaGateway::new(
+                MockTransport {
+                    responses: Mutex::new(vec![Ok(response(status))]),
+                },
+                ledger.clone(),
+                1024,
+            );
+            let error = gateway
+                .get_current_user(&credential, Path::new("unused"))
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("status {status} must fail"));
+            assert_eq!(error.code(), expected);
+            assert!(error.message().contains(message_fragment));
+            assert_eq!(error.details()["network"]["attempts"], 1);
+            assert_eq!(error.details()["network"]["tier3"], 1);
+            assert_eq!(ledger_len(&ledger), 1);
+        }
     }
 
     #[tokio::test]

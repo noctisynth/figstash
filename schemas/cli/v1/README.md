@@ -13,6 +13,14 @@ Agent-facing high-level command schemas are:
 - `outline.schema.json`: sparse node discovery tree;
 - `schema.schema.json`: command catalog or one detailed command contract.
 
+Authentication schemas distinguish local presence from remote identity:
+
+- `auth.status.schema.json`: zero-network local credential presence;
+- `auth.whoami.schema.json`: explicitly validated Tier 3 current-user identity.
+
 `figstash schema` exposes the same catalog at runtime. `figstash schema <command>`
 returns its input schema, successful data schema, documented errors, network
 classification, local-state effect, and examples without accessing Figma.
+
+The minimal PAT scopes for the implemented command set are `file_content:read`
+for snapshot pulls and `current_user:read` for `auth whoami`.

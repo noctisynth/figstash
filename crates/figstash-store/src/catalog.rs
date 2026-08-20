@@ -1249,6 +1249,7 @@ const fn endpoint_name(endpoint: EndpointClass) -> &'static str {
         EndpointClass::GetImages => "get_images",
         EndpointClass::GetImageFills => "get_image_fills",
         EndpointClass::GetFileMeta => "get_file_meta",
+        EndpointClass::GetCurrentUser => "get_current_user",
     }
 }
 

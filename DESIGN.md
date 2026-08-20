@@ -112,6 +112,9 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 | 节点图片/SVG 渲染 | `GET /v1/images/:key` | 1 | `file_content:read` | 视觉阶段 |
 | 获取 image fill URL | `GET /v1/files/:key/images` | 2 | `file_content:read` | 视觉阶段 |
 | 文件 metadata/version 探测 | `GET /v1/files/:key/meta` | 3 | `file_metadata:read` | 核心 CLI 优化 |
+| 当前认证用户 | `GET /v1/me` | 3 | `current_user:read` | 核心 CLI |
+
+所有 Figma endpoint URL 必须序列化为规范的单斜杠路径；通过 base URL 追加 path segment 时必须先移除末尾空 segment，禁止产生 `/v1//...`。gateway 测试必须断言完整序列化 URL，并使用仅监听 loopback 的本地 HTTP server 验证 production transport 的 method 和 credential header；测试不得访问真实 Figma API。
 
 当前官方限制中，View/Collab 席位的 Tier 1 为最多 6 次/月、Tier 2 为最多 5 次/分钟、Tier 3 为最多 10 次/分钟；Figma 明确保留调整限制及在高负载下降低实际额度的权利。因此这些数字是运行时策略的初始值，不是硬编码的产品承诺。
 
@@ -126,6 +129,8 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 ### 5.3 快照刷新策略
 
 `figstash snapshot pull` 是核心阶段唯一能调用 Tier 1 文件内容端点的命令。
+
+Agent 集成必须把 Tier 1 视为需要逐次授权的稀缺操作：首次处理任何目标时，先用 `--offline snapshot list/status` 检查对应 file/profile 的本地快照；已有可用快照时直接进入全离线查询，不得为了“确保最新”主动 pull。普通的“查看设计”“读取节点”或“按 Figma 实现”请求不等同于刷新授权。缓存缺失、指定了未缓存 profile/version 或用户要求刷新时，Agent 必须在执行前告知用户将调用的 Tier 1 端点、预计最大请求数、需要联网的原因及是否使用 `--force`，并获得针对该次操作的明确授权。授权不延伸到失败重试、其他文件、其他 request profile 或后续刷新。
 
 默认流程：
 
@@ -280,6 +285,7 @@ P2/P3 crate 在对应阶段开始前不创建空壳，避免提前固化无用�
 # 认证和诊断
 figstash auth set --stdin
 figstash auth status
+figstash auth whoami
 figstash auth clear
 figstash doctor
 figstash doctor --network
@@ -328,6 +334,7 @@ figstash mcp --stdio
 
 - 支持 `figma.com/design/...`、`figma.com/file/...`、FigJam/branch URL 以及直接 file key。
 - URL 中 `node-id=1234-5678` 统一规范化为 REST ID `1234:5678`。
+- 浏览器链接中的展示态参数（例如 `p`、`t`）不参与快照身份或请求 profile；解析器只提取受支持的资源类型、file/branch key 和 `node-id`，其余参数忽略。因而从浏览器地址栏复制的完整 Design URL 可直接作为 `<figma-url-or-file-key>` 传入。
 - file key、branch key 和 node ID 在进入应用层前完成语法校验和 URL decode。
 - token 不允许通过命令行参数传入，防止出现在进程列表和 shell history。
 - `--snapshot` 未指定时读取对应 request profile 的本地 HEAD。
@@ -337,6 +344,14 @@ figstash mcp --stdio
 - `context`、`outline`、`schema` 和所有底层 query 永不因 cache miss 隐式联网；`snapshot_missing` 只提供显式 pull 建议。
 - `schema` 不带参数时列出机器可读的命令目录；传入稳定 command name 时返回参数/结果 schema、错误、网络和本地写入效果及示例。
 - 全局 `--offline` 使所有在线 command 在发送请求前返回 `offline_mode`；本地 query 行为不变。
+
+#### 9.2.1 页面与页面分隔器
+
+- `snapshot pull` 对 Design URL 始终调用一次完整文件端点；URL 中的 `node-id` 只作为后续本地查询目标，不把远端请求缩小为单个节点，也不增加请求次数。
+- Figma REST 文件树按 `DOCUMENT -> CANVAS(page) -> children` 处理。所有页面都是 `DOCUMENT` 下保持原始顺序的 `CANVAS` 兄弟节点，不建立“二级页面”层级。
+- Figma 左侧 Pages 面板中的分隔标题是页面组织 UI，不代表其后的页面成为 REST 树中的子页面。Figstash 必须继续索引分隔标题之后的每个 `CANVAS`，不得因空页面、特殊名称或未知字段跳过后续页面。
+- Plugin API 提供页面分隔器标识，但当前 REST node schema 未提供可依赖的等价字段。核心解析器因此保留原始 JSON 和未知字段，并将 REST payload 中的分隔器表示按普通、可能为空的 `CANVAS` 安全处理；不得仅凭名称或视觉缩进推断层级。
+- 后续若真实、脱敏的 REST fixture 提供稳定且权威的分隔器信号，可在 `outline` 中增加非破坏性的展示分类；该分类不能改变 node ID、parent、sibling order、path、快照内容或本地查询语义。
 
 ### 9.3 stdout/stderr 规范
 
@@ -641,7 +656,9 @@ schema_migrations(version, applied_at, checksum)
 2. 系统 keyring 中的 Figstash PAT；
 3. 未配置，返回 `auth_missing`。
 
-`figstash auth set --stdin` 从 stdin 读取 PAT 并写入系统 keyring；token 不回显、不写普通配置、不出现在 args、JSON 和日志。`auth status` 只返回 credential kind、token source 和是否存在，不返回 token 内容，也不声称已验证远端 scope。`auth clear` 删除 keyring 项。
+`figstash auth set --stdin` 从 stdin 读取 PAT 并写入系统 keyring；token 不回显、不写普通配置、不出现在 args、JSON 和日志。`auth status` 只返回 credential kind、token source 和是否存在，不返回 token 内容，也不声称已验证远端 scope。`auth whoami` 是显式在线命令，调用 Tier 3 `GET /v1/me` 验证 credential 并返回规范化的 `id`、`handle`、`email` 和 `avatarUrl`；成功结果同时返回 credential kind/source 和 `remoteValidated=true`。它不消耗 Tier 1 文件内容额度，但仍受 Tier 3 限流和既有安全重试策略约束。`--offline auth whoami` 在读取 credential 或发送请求前返回 `offline_mode`。`auth clear` 删除 keyring 项。
+
+当前完整 CLI 的 PAT 最小 scope 是 `file_content:read` 与 `current_user:read`：前者用于快照拉取，后者用于 `auth whoami`。P1 metadata 探测落地后还需要 `file_metadata:read`。Figstash 不从 token 字符串猜测或声称已授予 scope；远端 401/403 按稳定认证错误返回。
 
 网络层使用显式 `CredentialKind`，不能从 token 字符串猜测类型：
 
@@ -677,6 +694,7 @@ GetFileNodes  -> Tier1
 GetImages     -> Tier1
 GetImageFills -> Tier2
 GetFileMeta   -> Tier3
+GetCurrentUser -> Tier3
 ```
 
 未知端点默认禁止，而不是假设低 Tier。

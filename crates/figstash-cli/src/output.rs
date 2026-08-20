@@ -37,6 +37,20 @@ impl CommandOutput {
             warnings: Vec::new(),
         })
     }
+
+    pub(crate) fn figma(
+        data: impl serde::Serialize,
+        network: NetworkUsage,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            data: serde_json::to_value(data)?,
+            source: ResponseSource::Figma,
+            snapshot_id: None,
+            figma_version: None,
+            network,
+            warnings: Vec::new(),
+        })
+    }
 }
 
 pub(crate) fn emit_success(command: &str, output: CommandOutput, started: Instant) {

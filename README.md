@@ -29,8 +29,14 @@ pull one file:
 ```bash
 cargo build --release -p figstash-cli
 printf '%s' "$FIGMA_TOKEN" | target/release/figstash auth set --stdin
+target/release/figstash auth whoami
 target/release/figstash snapshot pull 'https://www.figma.com/design/FILE_KEY/Name'
 ```
+
+Generate the PAT with the minimal scopes `current_user:read` and
+`file_content:read`. `auth whoami` explicitly performs `GET /v1/me` to verify
+the credential and report its Figma user. It is a Tier 3 request, not a Tier 1
+file-content request; `auth status` remains the zero-network presence check.
 
 The first pull performs exactly one Tier 1 `GET /v1/files/:key`. `--force` also
 performs exactly one Tier 1 request and is never retried automatically. Until the
@@ -103,6 +109,8 @@ log_level = "warn"
 `FIGMA_TOKEN` is always interpreted explicitly as a PAT and takes precedence
 over the system keyring. PAT contents are never written to config, SQLite, logs,
 or JSON output. The data directory is created with user-only permissions on Unix.
+When P1 metadata probing is implemented, PATs using that feature will also need
+`file_metadata:read`.
 
 ## Development
 

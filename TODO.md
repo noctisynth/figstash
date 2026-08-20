@@ -186,6 +186,37 @@
 
 验收：Agent 可通过 `outline -> context` 完成节点发现与单向 D2C handoff；不了解节点时不会意外输出整个文件，所有高层 query 的 `meta.network.attempts` 为零。
 
+### P0.14 远端认证身份
+
+- [x] 增加 `GetCurrentUser -> Tier3` 封闭端点分类与 `GET /v1/me` gateway。
+- [x] 实现显式在线的 `figstash auth whoami`，返回规范化用户、credential 来源和远端验证状态。
+- [x] `auth status` 保持纯本地；`--offline auth whoami` 在读取 credential 和请求前失败。
+- [x] 记录实际 Tier 3 尝试并沿用 Tier 2/3 最多一次安全重试策略。
+- [x] 补齐 CLI schema、mock transport、错误映射、文档和仓库 CLI Skill。
+- [x] 记录当前 PAT 最小 scope 为 `file_content:read` 与 `current_user:read`。
+
+验收：成功 whoami 返回当前 Figma 用户且 `meta.source=figma`；mock 测试验证成功、offline、认证失败和 scope 缺失路径，测试不访问真实 Figma API。
+
+### P0.15 Agent Tier 1 安全工作流
+
+- [x] CLI Skill 要求首次使用先以 `--offline snapshot list/status` 检查目标 file/profile。
+- [x] 已有快照时默认只执行带 `--offline` 的本地查询，不主动刷新。
+- [x] cache miss、未缓存 profile/version 和刷新场景在执行前逐次告知端点、最大 Tier 1 次数及原因，并等待明确用户授权。
+- [x] 明确普通设计读取请求不是 pull 授权，单次授权不延伸到重试、其他文件/profile 或后续刷新。
+- [x] `--force` 只用于用户明确要求并授权的刷新；Tier 1 失败不自动重试。
+
+验收：首次加载 Skill 的 Agent 在已有快照时不调用 Tier 1；没有快照时只报告缺失和拟执行成本，未获得明确授权前不调用 `snapshot pull`。
+
+### P0.16 Figma endpoint URL 规范化
+
+- [x] 修复 trailing-slash base URL 追加 path segment 时产生 `/v1//files/:key` 的问题。
+- [x] 对普通、version 和 `geometry=paths` 文件请求断言完整规范 URL。
+- [x] 使用 loopback HTTP server 验证 production transport 的 GET method 与 PAT `X-Figma-Token` header。
+- [x] 检查全部现有 endpoint builder，不允许重复斜杠；测试不得访问真实 Figma API。
+- [x] 同步仓库级与全局 CLI Skill 的 endpoint 诊断约束。
+
+验收：`snapshot pull FILE_KEY` 只会构造 `https://api.figma.com/v1/files/FILE_KEY`；回归测试能在出现 `/v1//files/...` 时失败，且不消耗 Figma 配额。
+
 P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓存 Figma 文件；除显式 pull 外不存在 Tier 1 路径。
 
 ## P1 — 核心完整性、稳定性与性能
@@ -227,6 +258,7 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 
 - [ ] 将被审计项目所有公开能力逐项转成 acceptance fixture。
 - [ ] 核对 URL/node/depth/cacheDir/force refresh 行为覆盖。
+- [ ] 增加脱敏的多页面 REST fixture，覆盖普通 `CANVAS`、空页面和页面分隔器的真实 payload；验证完整浏览器 URL 忽略 `p`/`t`、所有页面保持顺序且不会被误建为嵌套层级。
 - [ ] 核对所有现有 Figma node、Paint、effect 和 component 类型。
 - [ ] 输出明确的 parity report；不将 transport/name compatibility 计为缺口。
 

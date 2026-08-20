@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "schema",
     "auth.set",
     "auth.status",
+    "auth.whoami",
     "auth.clear",
     "doctor",
     "quota.status",
@@ -85,6 +86,13 @@ fn effects(
             Some(1),
             true,
         ),
+        "auth.whoami" => (
+            "online_command",
+            "explicit",
+            Some("get_current_user"),
+            Some(3),
+            true,
+        ),
         "doctor" => ("diagnostic", "optional_tcp_only", None, None, true),
         "auth.set" | "auth.clear" | "snapshot.prune" => {
             ("local_command", "never", None, None, true)
@@ -115,7 +123,7 @@ fn input_schema(name: &str) -> Value {
         "auth.set" => {
             json!({"type": "object", "required": ["stdin"], "properties": {"stdin": {"const": true}}, "additionalProperties": false})
         }
-        "auth.status" | "auth.clear" | "quota.status" => {
+        "auth.status" | "auth.whoami" | "auth.clear" | "quota.status" => {
             json!({"type": "object"})
         }
         "snapshot.list" => json!({
@@ -163,6 +171,7 @@ fn output_schema(name: &str) -> AppResult<Value> {
         "schema" => include_str!("../../../schemas/cli/v1/schema.schema.json"),
         "auth.set" => include_str!("../../../schemas/cli/v1/auth.set.schema.json"),
         "auth.status" => include_str!("../../../schemas/cli/v1/auth.status.schema.json"),
+        "auth.whoami" => include_str!("../../../schemas/cli/v1/auth.whoami.schema.json"),
         "auth.clear" => include_str!("../../../schemas/cli/v1/auth.clear.schema.json"),
         "doctor" => include_str!("../../../schemas/cli/v1/doctor.schema.json"),
         "quota.status" => include_str!("../../../schemas/cli/v1/quota.status.schema.json"),
@@ -207,7 +216,7 @@ fn errors(name: &str) -> Vec<&'static str> {
             "store_corrupt",
             "store_failed",
         ],
-        "snapshot.pull" => vec![
+        "snapshot.pull" | "auth.whoami" => vec![
             "offline_mode",
             "auth_missing",
             "auth_failed",
@@ -234,6 +243,7 @@ fn examples(name: &str) -> Vec<&'static str> {
             "figstash outline FILE_KEY --node 1:1 --depth 1",
         ],
         "schema" => vec!["figstash schema", "figstash schema context"],
+        "auth.whoami" => vec!["figstash auth whoami"],
         "snapshot.pull" => vec![
             "figstash snapshot pull FILE_KEY",
             "figstash snapshot pull FILE_KEY --force",

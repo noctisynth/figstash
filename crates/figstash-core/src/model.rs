@@ -30,6 +30,8 @@ pub enum EndpointClass {
     GetImageFills,
     /// Reserved metadata endpoint class used by a later milestone.
     GetFileMeta,
+    /// `GET /v1/me`.
+    GetCurrentUser,
 }
 
 impl EndpointClass {
@@ -39,7 +41,7 @@ impl EndpointClass {
         match self {
             Self::GetFile | Self::GetFileNodes | Self::GetImages => Tier::Tier1,
             Self::GetImageFills => Tier::Tier2,
-            Self::GetFileMeta => Tier::Tier3,
+            Self::GetFileMeta | Self::GetCurrentUser => Tier::Tier3,
         }
     }
 }
@@ -306,6 +308,7 @@ mod tests {
         assert_eq!(EndpointClass::GetImages.tier(), Tier::Tier1);
         assert_eq!(EndpointClass::GetImageFills.tier(), Tier::Tier2);
         assert_eq!(EndpointClass::GetFileMeta.tier(), Tier::Tier3);
+        assert_eq!(EndpointClass::GetCurrentUser.tier(), Tier::Tier3);
     }
 
     #[test]

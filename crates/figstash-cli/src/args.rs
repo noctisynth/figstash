@@ -31,6 +31,7 @@ impl Cli {
             Command::Auth(AuthCommand { command }) => match command {
                 AuthSubcommand::Set(_) => "auth.set",
                 AuthSubcommand::Status => "auth.status",
+                AuthSubcommand::Whoami => "auth.whoami",
                 AuthSubcommand::Clear => "auth.clear",
             },
             Command::Doctor(_) => "doctor",
@@ -117,6 +118,8 @@ pub(crate) struct AuthCommand {
 pub(crate) enum AuthSubcommand {
     Set(AuthSetArgs),
     Status,
+    /// Validate the credential and return the current Figma user.
+    Whoami,
     Clear,
 }
 
