@@ -25,6 +25,9 @@ pub(crate) struct Cli {
 impl Cli {
     pub(crate) const fn command_name(&self) -> &'static str {
         match &self.command {
+            Command::Context(_) => "context",
+            Command::Outline(_) => "outline",
+            Command::Schema(_) => "schema",
             Command::Auth(AuthCommand { command }) => match command {
                 AuthSubcommand::Set(_) => "auth.set",
                 AuthSubcommand::Status => "auth.status",
@@ -57,6 +60,12 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Return self-contained compact design context for one node.
+    Context(ContextArgs),
+    /// Return a sparse local node tree for target discovery.
+    Outline(OutlineArgs),
+    /// Inspect machine-readable command contracts.
+    Schema(SchemaArgs),
     Auth(AuthCommand),
     Doctor(DoctorArgs),
     Quota(QuotaCommand),
@@ -64,6 +73,38 @@ pub(crate) enum Command {
     Node(NodeCommand),
     Tokens(TokensCommand),
     Components(ComponentsCommand),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ContextArgs {
+    pub(crate) target: String,
+    #[arg(long)]
+    pub(crate) node: Option<String>,
+    #[arg(long)]
+    pub(crate) depth: Option<u32>,
+    #[arg(long)]
+    pub(crate) snapshot: Option<String>,
+    #[arg(long, value_enum, default_value_t = GeometryArg::None)]
+    pub(crate) geometry: GeometryArg,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct OutlineArgs {
+    pub(crate) target: String,
+    #[arg(long)]
+    pub(crate) node: Option<String>,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) depth: u32,
+    #[arg(long)]
+    pub(crate) snapshot: Option<String>,
+    #[arg(long, value_enum, default_value_t = GeometryArg::None)]
+    pub(crate) geometry: GeometryArg,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SchemaArgs {
+    /// Stable command name such as `context` or `snapshot.pull`.
+    pub(crate) command: Option<String>,
 }
 
 #[derive(Debug, Args)]

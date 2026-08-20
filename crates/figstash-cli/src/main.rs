@@ -4,6 +4,7 @@ mod app;
 mod args;
 mod config;
 mod output;
+mod schema_catalog;
 
 use clap::{Parser, error::ErrorKind};
 use figstash_core::{AppError, ErrorCode, ExitCode};

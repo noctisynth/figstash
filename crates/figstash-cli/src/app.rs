@@ -1,8 +1,8 @@
 //! CLI application composition.
 
 use crate::args::{
-    AuthSubcommand, Cli, Command, ComponentsSubcommand, GeometryArg, NodeSubcommand,
-    QuotaSubcommand, SnapshotSubcommand, TokensSubcommand, ViewArg,
+    AuthSubcommand, Cli, Command, ComponentsSubcommand, ContextArgs, GeometryArg, NodeSubcommand,
+    OutlineArgs, QuotaSubcommand, SchemaArgs, SnapshotSubcommand, TokensSubcommand, ViewArg,
 };
 use crate::config::AppConfig;
 use crate::output::{CommandOutput, emit_failure, emit_success};
@@ -49,6 +49,9 @@ pub(crate) async fn run(cli: Cli) -> i32 {
 
 async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
     match &cli.command {
+        Command::Context(args) => context_get(config, args),
+        Command::Outline(args) => outline_get(config, args),
+        Command::Schema(args) => schema_get(args),
         Command::Auth(auth) => auth_command(&auth.command),
         Command::Doctor(args) => doctor(config, cli.offline, args.network).await,
         Command::Quota(quota) => match quota.command {
@@ -138,6 +141,54 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
                 local_with_snapshot(&data, &data.snapshot)
             }
         },
+    }
+}
+
+fn context_get(config: &AppConfig, args: &ContextArgs) -> AppResult<CommandOutput> {
+    let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
+    let node_id = node_id.ok_or_else(|| {
+        AppError::new(
+            ErrorCode::NodeRequired,
+            "Design context requires a node URL or an explicit `--node`.",
+        )
+        .with_details(json!({
+            "fileKey": target.effective_file_key(),
+            "suggestedCommand": format!("figstash outline {}", target.effective_file_key()),
+        }))
+    })?;
+    let profile = request_profile(args.geometry);
+    let data = QueryService::new(Store::open(&config.data_dir)?).node_get(NodeGetOptions {
+        selector: SnapshotSelector {
+            file_key: target.effective_file_key(),
+            request_profile: profile.key(),
+            snapshot_id: args.snapshot.as_deref(),
+        },
+        node_id: Some(&node_id),
+        depth: args.depth,
+        view: View::Compact,
+    })?;
+    local_with_snapshot(&data, &data.snapshot)
+}
+
+fn outline_get(config: &AppConfig, args: &OutlineArgs) -> AppResult<CommandOutput> {
+    let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
+    let profile = request_profile(args.geometry);
+    let data = QueryService::new(Store::open(&config.data_dir)?).outline(
+        SnapshotSelector {
+            file_key: target.effective_file_key(),
+            request_profile: profile.key(),
+            snapshot_id: args.snapshot.as_deref(),
+        },
+        node_id.as_deref(),
+        args.depth,
+    )?;
+    local_with_snapshot(&data, &data.snapshot)
+}
+
+fn schema_get(args: &SchemaArgs) -> AppResult<CommandOutput> {
+    match args.command.as_deref() {
+        Some(command) => serialize_neutral(crate::schema_catalog::contract(command)?),
+        None => serialize_neutral(crate::schema_catalog::catalog()),
     }
 }
 
@@ -355,8 +406,31 @@ where
 }
 
 fn node_get(config: &AppConfig, args: &crate::args::NodeGetArgs) -> AppResult<CommandOutput> {
-    let target = parse_figma_target(&args.target)?;
-    let explicit_node = args.node.as_deref().map(normalize_node_id).transpose()?;
+    let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
+    let profile = request_profile(args.geometry);
+    let store = Store::open(&config.data_dir)?;
+    let data = QueryService::new(store).node_get(NodeGetOptions {
+        selector: SnapshotSelector {
+            file_key: target.effective_file_key(),
+            request_profile: profile.key(),
+            snapshot_id: args.snapshot.as_deref(),
+        },
+        node_id: node_id.as_deref(),
+        depth: args.depth,
+        view: match args.view {
+            ViewArg::Compact => View::Compact,
+            ViewArg::Raw => View::Raw,
+        },
+    })?;
+    local_with_snapshot(&data, &data.snapshot)
+}
+
+fn target_and_node(
+    target: &str,
+    explicit_node: Option<&str>,
+) -> AppResult<(FigmaTarget, Option<String>)> {
+    let target = parse_figma_target(target)?;
+    let explicit_node = explicit_node.map(normalize_node_id).transpose()?;
     if let (Some(url_node), Some(explicit)) = (&target.node_id, &explicit_node) {
         if url_node != explicit {
             return Err(AppError::new(
@@ -366,23 +440,8 @@ fn node_get(config: &AppConfig, args: &crate::args::NodeGetArgs) -> AppResult<Co
             .with_details(json!({"urlNode": url_node, "explicitNode": explicit})));
         }
     }
-    let node_id = explicit_node.as_deref().or(target.node_id.as_deref());
-    let profile = request_profile(args.geometry);
-    let store = Store::open(&config.data_dir)?;
-    let data = QueryService::new(store).node_get(NodeGetOptions {
-        selector: SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: args.snapshot.as_deref(),
-        },
-        node_id,
-        depth: args.depth,
-        view: match args.view {
-            ViewArg::Compact => View::Compact,
-            ViewArg::Raw => View::Raw,
-        },
-    })?;
-    local_with_snapshot(&data, &data.snapshot)
+    let node_id = explicit_node.or_else(|| target.node_id.clone());
+    Ok((target, node_id))
 }
 
 fn node_search(config: &AppConfig, args: &crate::args::NodeSearchArgs) -> AppResult<CommandOutput> {

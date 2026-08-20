@@ -31,6 +31,12 @@ fn every_core_local_command_emits_one_schema_valid_json_object() {
     let (temporary, _store, _summary) = prepared_store();
     let cases: &[(&str, &[&str])] = &[
         (
+            "context",
+            &["context", FILE_KEY, "--node", "2:1", "--depth", "1"],
+        ),
+        ("outline", &["outline", FILE_KEY]),
+        ("schema", &["schema", "context"]),
+        (
             "node.get",
             &["node", "get", FILE_KEY, "--node", "2:1", "--depth", "1"],
         ),
@@ -62,6 +68,111 @@ fn every_core_local_command_emits_one_schema_valid_json_object() {
         assert_eq!(response["meta"]["network"]["attempts"], 0);
         validate_schema(schema_for(command), &response["data"]);
     }
+}
+
+#[test]
+fn high_level_agent_commands_are_local_safe_and_unambiguous() {
+    let (temporary, _store, _summary) = prepared_store();
+
+    let context = run_cli(
+        temporary.path(),
+        &[
+            "context",
+            "https://www.figma.com/design/SyntheticFileKey123/Name?node-id=2-1",
+        ],
+    );
+    assert!(context.status.success());
+    let context = parse_single_stdout(&context);
+    assert_eq!(context["data"]["node"]["id"], "2:1");
+    assert_eq!(context["meta"]["network"]["attempts"], 0);
+
+    let outline = run_cli(temporary.path(), &["outline", FILE_KEY]);
+    assert!(outline.status.success());
+    let outline = parse_single_stdout(&outline);
+    assert_eq!(outline["data"]["root"]["id"], "0:0");
+    assert_eq!(
+        outline["data"]["root"]["children"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        outline["data"]["root"]["children"][0]["children"]
+            .as_array()
+            .map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(outline["meta"]["network"]["attempts"], 0);
+
+    let offline_context = run_cli(
+        temporary.path(),
+        &["--offline", "context", FILE_KEY, "--node", "2:1"],
+    );
+    assert!(offline_context.status.success());
+    assert_eq!(
+        parse_single_stdout(&offline_context)["meta"]["network"]["attempts"],
+        0
+    );
+
+    let offline_outline = run_cli(temporary.path(), &["--offline", "outline", FILE_KEY]);
+    assert!(offline_outline.status.success());
+    assert_eq!(
+        parse_single_stdout(&offline_outline)["meta"]["network"]["attempts"],
+        0
+    );
+
+    let missing_node = run_cli(temporary.path(), &["context", FILE_KEY]);
+    assert_eq!(missing_node.status.code(), Some(2));
+    let missing_node = parse_single_stdout(&missing_node);
+    assert_eq!(missing_node["error"]["code"], "node_required");
+    assert_eq!(missing_node["meta"]["network"]["attempts"], 0);
+    assert_eq!(
+        missing_node["error"]["details"]["suggestedCommand"],
+        format!("figstash outline {FILE_KEY}")
+    );
+
+    let conflict = run_cli(
+        temporary.path(),
+        &[
+            "context",
+            "https://www.figma.com/design/SyntheticFileKey123/Name?node-id=2-1",
+            "--node",
+            "2:2",
+        ],
+    );
+    assert_eq!(conflict.status.code(), Some(2));
+    let conflict = parse_single_stdout(&conflict);
+    assert_eq!(conflict["error"]["code"], "invalid_arguments");
+    assert_eq!(conflict["meta"]["network"]["attempts"], 0);
+}
+
+#[test]
+fn schema_command_supports_catalog_and_detailed_contract_discovery() {
+    let temporary =
+        tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+    let catalog = run_cli(temporary.path(), &["schema"]);
+    assert!(catalog.status.success());
+    let catalog = parse_single_stdout(&catalog);
+    assert!(
+        catalog["data"]["commands"]
+            .as_array()
+            .is_some_and(|commands| commands.iter().any(|command| command["name"] == "context"))
+    );
+    validate_schema(
+        include_str!("../../../schemas/cli/v1/schema.schema.json"),
+        &catalog["data"],
+    );
+
+    let detail = run_cli(temporary.path(), &["schema", "snapshot.pull"]);
+    assert!(detail.status.success());
+    let detail = parse_single_stdout(&detail);
+    assert_eq!(detail["data"]["network"], "explicit");
+    assert_eq!(detail["data"]["endpointClass"], "get_file");
+    assert_eq!(detail["data"]["tier"], 1);
+    assert_eq!(detail["meta"]["network"]["attempts"], 0);
+
+    let unknown = run_cli(temporary.path(), &["schema", "missing.command"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    let unknown = parse_single_stdout(&unknown);
+    assert_eq!(unknown["error"]["code"], "invalid_arguments");
 }
 
 #[test]
@@ -298,6 +409,9 @@ fn validate_schema(schema: &str, instance: &Value) {
 
 fn schema_for(command: &str) -> &'static str {
     match command {
+        "context" => include_str!("../../../schemas/cli/v1/context.schema.json"),
+        "outline" => include_str!("../../../schemas/cli/v1/outline.schema.json"),
+        "schema" => include_str!("../../../schemas/cli/v1/schema.schema.json"),
         "node.get" => include_str!("../../../schemas/cli/v1/node.get.schema.json"),
         "node.search" => include_str!("../../../schemas/cli/v1/node.search.schema.json"),
         "tokens.get" => include_str!("../../../schemas/cli/v1/tokens.get.schema.json"),

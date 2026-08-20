@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "name", "nodeType", "depth", "pathIds", "childCount"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "nodeType": { "type": "string" },
+        "bounds": { "type": "object" },
+        "depth": { "type": "integer", "minimum": 0 },
+        "pathIds": { "type": "array", "items": { "type": "string" } },
+        "childCount": { "type": "integer", "minimum": 0 },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["snapshot", "root"],
+  "properties": {
+    "snapshot": { "type": "object", "required": ["id", "fileKey", "figmaVersion", "requestProfile"] },
+    "root": { "$ref": "#/$defs/node" }
+  },
+  "additionalProperties": false
+}
