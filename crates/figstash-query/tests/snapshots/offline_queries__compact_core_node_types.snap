@@ -1,0 +1,323 @@
+---
+source: crates/figstash-query/tests/offline_queries.rs
+expression: compact.node
+---
+{
+  "children": [
+    {
+      "depth": 1,
+      "id": "1:1",
+      "name": "CANVAS",
+      "nodeType": "CANVAS",
+      "pathIds": [
+        "0:0",
+        "1:1"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:2",
+      "name": "FRAME",
+      "nodeType": "FRAME",
+      "pathIds": [
+        "0:0",
+        "1:2"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:3",
+      "name": "GROUP",
+      "nodeType": "GROUP",
+      "pathIds": [
+        "0:0",
+        "1:3"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:4",
+      "name": "SECTION",
+      "nodeType": "SECTION",
+      "pathIds": [
+        "0:0",
+        "1:4"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:5",
+      "name": "VECTOR",
+      "nodeType": "VECTOR",
+      "pathIds": [
+        "0:0",
+        "1:5"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:6",
+      "name": "BOOLEAN_OPERATION",
+      "nodeType": "BOOLEAN_OPERATION",
+      "pathIds": [
+        "0:0",
+        "1:6"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:7",
+      "name": "STAR",
+      "nodeType": "STAR",
+      "pathIds": [
+        "0:0",
+        "1:7"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:8",
+      "name": "LINE",
+      "nodeType": "LINE",
+      "pathIds": [
+        "0:0",
+        "1:8"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:9",
+      "name": "ELLIPSE",
+      "nodeType": "ELLIPSE",
+      "pathIds": [
+        "0:0",
+        "1:9"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:10",
+      "name": "REGULAR_POLYGON",
+      "nodeType": "REGULAR_POLYGON",
+      "pathIds": [
+        "0:0",
+        "1:10"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:11",
+      "name": "RECTANGLE",
+      "nodeType": "RECTANGLE",
+      "pathIds": [
+        "0:0",
+        "1:11"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:12",
+      "name": "TEXT",
+      "nodeType": "TEXT",
+      "pathIds": [
+        "0:0",
+        "1:12"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:13",
+      "name": "SLICE",
+      "nodeType": "SLICE",
+      "pathIds": [
+        "0:0",
+        "1:13"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:14",
+      "name": "COMPONENT",
+      "nodeType": "COMPONENT",
+      "pathIds": [
+        "0:0",
+        "1:14"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:15",
+      "name": "COMPONENT_SET",
+      "nodeType": "COMPONENT_SET",
+      "pathIds": [
+        "0:0",
+        "1:15"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:16",
+      "name": "INSTANCE",
+      "nodeType": "INSTANCE",
+      "pathIds": [
+        "0:0",
+        "1:16"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:17",
+      "name": "STAMP",
+      "nodeType": "STAMP",
+      "pathIds": [
+        "0:0",
+        "1:17"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:18",
+      "name": "WIDGET",
+      "nodeType": "WIDGET",
+      "pathIds": [
+        "0:0",
+        "1:18"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:19",
+      "name": "EMBED",
+      "nodeType": "EMBED",
+      "pathIds": [
+        "0:0",
+        "1:19"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:20",
+      "name": "LINK_UNFURL",
+      "nodeType": "LINK_UNFURL",
+      "pathIds": [
+        "0:0",
+        "1:20"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:21",
+      "name": "MEDIA",
+      "nodeType": "MEDIA",
+      "pathIds": [
+        "0:0",
+        "1:21"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:22",
+      "name": "SHAPE_WITH_TEXT",
+      "nodeType": "SHAPE_WITH_TEXT",
+      "pathIds": [
+        "0:0",
+        "1:22"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:23",
+      "name": "CODE_BLOCK",
+      "nodeType": "CODE_BLOCK",
+      "pathIds": [
+        "0:0",
+        "1:23"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:24",
+      "name": "CONNECTOR",
+      "nodeType": "CONNECTOR",
+      "pathIds": [
+        "0:0",
+        "1:24"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:25",
+      "name": "TABLE",
+      "nodeType": "TABLE",
+      "pathIds": [
+        "0:0",
+        "1:25"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:26",
+      "name": "TABLE_CELL",
+      "nodeType": "TABLE_CELL",
+      "pathIds": [
+        "0:0",
+        "1:26"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:27",
+      "name": "HIGHLIGHT",
+      "nodeType": "HIGHLIGHT",
+      "pathIds": [
+        "0:0",
+        "1:27"
+      ],
+      "visible": true
+    },
+    {
+      "depth": 1,
+      "id": "1:28",
+      "name": "WASHI_TAPE",
+      "nodeType": "WASHI_TAPE",
+      "pathIds": [
+        "0:0",
+        "1:28"
+      ],
+      "visible": true
+    }
+  ],
+  "depth": 0,
+  "id": "0:0",
+  "name": "Document",
+  "nodeType": "DOCUMENT",
+  "pathIds": [
+    "0:0"
+  ]
+}

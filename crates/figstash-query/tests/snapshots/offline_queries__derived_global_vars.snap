@@ -1,0 +1,96 @@
+---
+source: crates/figstash-query/tests/offline_queries.rs
+expression: tokens.global_vars
+---
+[
+  {
+    "id": "gv_f726b7056db69c93",
+    "category": "color_or_paint",
+    "value": [
+      {
+        "color": {
+          "a": 1,
+          "b": 1,
+          "g": 1,
+          "r": 1
+        },
+        "type": "SOLID"
+      }
+    ],
+    "occurrences": 2,
+    "references": [
+      {
+        "nodeId": "2:1",
+        "field": "fills"
+      },
+      {
+        "nodeId": "2:2",
+        "field": "fills"
+      }
+    ]
+  },
+  {
+    "id": "gv_622c6455aeea8076",
+    "category": "radius",
+    "value": 12,
+    "occurrences": 3,
+    "references": [
+      {
+        "nodeId": "2:1",
+        "field": "cornerRadius"
+      },
+      {
+        "nodeId": "2:2",
+        "field": "cornerRadius"
+      },
+      {
+        "nodeId": "3:1",
+        "field": "cornerRadius"
+      }
+    ]
+  },
+  {
+    "id": "gv_f10379c9dcdefd6b",
+    "category": "spacing_or_layout",
+    "value": 16,
+    "occurrences": 4,
+    "references": [
+      {
+        "nodeId": "2:1",
+        "field": "paddingLeft"
+      },
+      {
+        "nodeId": "2:1",
+        "field": "paddingRight"
+      },
+      {
+        "nodeId": "2:1",
+        "field": "paddingTop"
+      },
+      {
+        "nodeId": "2:1",
+        "field": "paddingBottom"
+      }
+    ]
+  },
+  {
+    "id": "gv_30553f3834d1255c",
+    "category": "spacing_or_layout",
+    "value": 8,
+    "occurrences": 3,
+    "references": [
+      {
+        "nodeId": "2:1",
+        "field": "itemSpacing"
+      },
+      {
+        "nodeId": "2:2",
+        "field": "itemSpacing"
+      },
+      {
+        "nodeId": "3:1",
+        "field": "itemSpacing"
+      }
+    ]
+  }
+]
