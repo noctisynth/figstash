@@ -36,5 +36,18 @@ Golden outputs use [`insta`](https://insta.rs/). Run `cargo insta test` and
 `cargo insta review` when intentionally updating them. Raw Figma inputs stay in
 `fixtures/figma`; generated `.snap` files live beside the tests that own them.
 
+## Versioning
+
+The repository uses [Semifold](https://github.com/noctisynth/semifold) with the
+Rust resolver. Package versions are written explicitly in every member
+`Cargo.toml` so Semifold can update each package deterministically.
+
+```bash
+smif commit
+smif status
+smif version
+smif config sync --check
+```
+
 See [DESIGN.md](./DESIGN.md) for the technical design and
 [TODO.md](./TODO.md) for the prioritized implementation plan.

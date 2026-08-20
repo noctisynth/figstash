@@ -1,14 +1,13 @@
 [package]
 name = "figstash-figma"
 description = "Figma REST boundary for Figstash"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-publish.workspace = true
+publish = false
 
 [dependencies]
 figstash-core.workspace = true
 
 [lints]
 workspace = true
-

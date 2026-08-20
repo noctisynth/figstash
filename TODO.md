@@ -14,6 +14,7 @@
   - [x] `figstash-query`
   - [x] `figstash-cli`
 - [x] 固定 Rust edition、MSRV 和 workspace dependency policy。
+- [x] 配置 Semifold，并在各 member manifest 中显式维护 package version。
 - [x] 配置 `rustfmt`、Clippy、单元测试和文档检查。
 - [ ] 配置 CI：format、clippy、test、JSON Schema contract test。
 - [ ] 加入 secret scanning 和依赖许可证/漏洞检查。
