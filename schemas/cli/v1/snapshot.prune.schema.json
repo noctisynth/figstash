@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshotIds", "blobHashes", "retainedSnapshots", "executed", "recoverable"],
+  "properties": {
+    "snapshotIds": { "type": "array", "items": { "type": "string" } },
+    "blobHashes": { "type": "array", "items": { "type": "string" } },
+    "retainedSnapshots": { "type": "integer", "minimum": 0 },
+    "executed": { "type": "boolean" },
+    "recoverable": { "const": false }
+  },
+  "additionalProperties": false
+}

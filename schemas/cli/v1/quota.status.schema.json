@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["scope", "month", "attempted", "succeeded", "byTier", "byEndpoint", "byCommand", "byFile", "recentRateLimit", "policySource", "policyUpdatedAt"],
+  "properties": {
+    "scope": { "const": "figstash_observed_only" },
+    "month": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$" },
+    "attempted": { "type": "integer", "minimum": 0 },
+    "succeeded": { "type": "integer", "minimum": 0 },
+    "byTier": { "type": "array" },
+    "byEndpoint": { "type": "array" },
+    "byCommand": { "type": "array" },
+    "byFile": { "type": "array" },
+    "recentRateLimit": { "type": ["object", "null"] },
+    "policySource": { "type": "string", "format": "uri" },
+    "policyUpdatedAt": { "type": "string" }
+  },
+  "additionalProperties": false
+}

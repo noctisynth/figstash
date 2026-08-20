@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "snapshot", "target", "responseHash", "responseSize"],
+  "properties": {
+    "status": { "const": "pulled" },
+    "snapshot": { "type": "object" },
+    "target": { "type": "object" },
+    "responseHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "responseSize": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

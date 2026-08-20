@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot", "node"],
+  "properties": {
+    "snapshot": { "type": "object", "required": ["id", "fileKey", "figmaVersion", "requestProfile"] },
+    "node": { "type": "object" }
+  },
+  "additionalProperties": false
+}

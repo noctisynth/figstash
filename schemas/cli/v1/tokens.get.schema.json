@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot", "namedStyles", "globalVars", "globalVarsSource"],
+  "properties": {
+    "snapshot": { "type": "object" },
+    "namedStyles": { "type": "array" },
+    "globalVars": { "type": "array" },
+    "globalVarsSource": { "const": "derived_from_file_content" }
+  },
+  "additionalProperties": false
+}
