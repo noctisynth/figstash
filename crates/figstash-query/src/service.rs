@@ -70,6 +70,40 @@ pub struct SearchData {
     pub next_cursor: Option<String>,
 }
 
+/// Sparse node representation used to discover a manageable D2C target.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineNode {
+    /// Node identifier.
+    pub id: String,
+    /// Human-readable node name.
+    pub name: String,
+    /// Normalized node type.
+    pub node_type: String,
+    /// Absolute bounds when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<figstash_core::BoundingBox>,
+    /// Depth in the complete file tree.
+    pub depth: u32,
+    /// Root-to-node identifier path.
+    pub path_ids: Vec<String>,
+    /// Number of direct children, including children omitted by the depth limit.
+    pub child_count: usize,
+    /// Ordered children included by the requested depth.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<OutlineNode>,
+}
+
+/// Data returned by the high-level `outline` command.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineData {
+    /// Resolved immutable snapshot.
+    pub snapshot: SnapshotSummary,
+    /// Sparse root node selected by the caller.
+    pub root: OutlineNode,
+}
+
 /// Data returned by `tokens get`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +201,26 @@ where
             nodes,
             next_cursor,
         })
+    }
+
+    /// Returns a sparse local tree for Agent target discovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns local-data or integrity errors; it never accesses a network.
+    pub fn outline(
+        &self,
+        selector: SnapshotSelector<'_>,
+        node_id: Option<&str>,
+        depth: u32,
+    ) -> AppResult<OutlineData> {
+        let snapshot = self.repository.resolve_snapshot(selector)?;
+        let node_id = match node_id {
+            Some(node_id) => node_id.to_owned(),
+            None => self.repository.root_node_id(&snapshot.id)?,
+        };
+        let root = self.load_outline(&snapshot.id, &node_id, depth, 0)?;
+        Ok(OutlineData { snapshot, root })
     }
 
     /// Returns named styles and deterministic locally derived repeated values.
@@ -314,6 +368,38 @@ where
             }
         }
         Ok(raw_node(&node, children))
+    }
+
+    fn load_outline(
+        &self,
+        snapshot_id: &str,
+        node_id: &str,
+        max_depth: u32,
+        current_depth: u32,
+    ) -> AppResult<OutlineNode> {
+        let node = self.load_node_with_candidates(snapshot_id, node_id)?;
+        let child_count = node.child_ids.len();
+        let mut children = Vec::new();
+        if current_depth < max_depth {
+            for child_id in &node.child_ids {
+                children.push(self.load_outline(
+                    snapshot_id,
+                    child_id,
+                    max_depth,
+                    current_depth + 1,
+                )?);
+            }
+        }
+        Ok(OutlineNode {
+            id: node.index.node_id,
+            name: node.index.name,
+            node_type: node.index.node_type,
+            bounds: node.index.bounds,
+            depth: node.index.depth,
+            path_ids: node.index.path_ids,
+            child_count,
+            children,
+        })
     }
 
     fn collect_nodes(

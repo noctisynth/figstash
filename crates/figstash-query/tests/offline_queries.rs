@@ -112,6 +112,16 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
     assert_eq!(components.components.len(), 1);
     assert_eq!(components.component_sets.len(), 1);
     assert_eq!(components.usage["3:1"].instance_node_ids, ["4:1"]);
+
+    let outline = service
+        .outline(selector(), None, 2)
+        .unwrap_or_else(|error| panic!("outline query failed: {error}"));
+    assert_eq!(outline.root.id, "0:0");
+    assert_eq!(outline.root.children.len(), 1);
+    assert_eq!(outline.root.children[0].children.len(), 4);
+    assert_eq!(outline.root.children[0].children[0].child_count, 2);
+    assert!(outline.root.children[0].children[0].children.is_empty());
+    insta::assert_json_snapshot!("agent_outline_depth_two", outline.root);
 }
 
 #[test]

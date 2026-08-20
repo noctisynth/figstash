@@ -15,6 +15,8 @@ pub enum ErrorCode {
     InvalidInput,
     /// The CLI arguments cannot be interpreted.
     InvalidArguments,
+    /// A node-scoped Agent command was called without a node identifier.
+    NodeRequired,
     /// No usable credential was found.
     AuthMissing,
     /// Figma rejected the credential.
@@ -62,6 +64,7 @@ impl ErrorCode {
         match self {
             Self::InvalidInput => "invalid_input",
             Self::InvalidArguments => "invalid_arguments",
+            Self::NodeRequired => "node_required",
             Self::AuthMissing => "auth_missing",
             Self::AuthFailed => "auth_failed",
             Self::ScopeMissing => "scope_missing",
@@ -88,7 +91,7 @@ impl ErrorCode {
     #[must_use]
     pub const fn exit_code(self) -> ExitCode {
         match self {
-            Self::InvalidInput | Self::InvalidArguments => ExitCode::Input,
+            Self::InvalidInput | Self::InvalidArguments | Self::NodeRequired => ExitCode::Input,
             Self::AuthMissing | Self::AuthFailed | Self::ScopeMissing => ExitCode::Auth,
             Self::SnapshotMissing
             | Self::SnapshotNotFound
@@ -229,6 +232,7 @@ mod tests {
     #[test]
     fn maps_error_categories_to_stable_exit_codes() {
         assert_eq!(ErrorCode::InvalidInput.exit_code(), ExitCode::Input);
+        assert_eq!(ErrorCode::NodeRequired.exit_code(), ExitCode::Input);
         assert_eq!(ErrorCode::AuthMissing.exit_code(), ExitCode::Auth);
         assert_eq!(ErrorCode::NodeNotFound.exit_code(), ExitCode::LocalData);
         assert_eq!(ErrorCode::NetworkFailed.exit_code(), ExitCode::Network);
