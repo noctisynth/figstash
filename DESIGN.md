@@ -856,7 +856,7 @@ GetFileMeta   -> Tier3
 ## 22. 发布、迁移与回滚
 
 - CLI 与 store schema 分别版本化；二者不共享一个隐式版本号。
-- 使用 Semifold changeset 管理 workspace package 版本与 changelog；每个 member manifest 显式保存自身 `version`，不继承 `workspace.package.version`。
+- 使用 Semifold changeset 管理 workspace package 版本与 changelog；每个 member manifest 显式保存自身 `version`，不继承 `workspace.package.version`。`main` 是 base branch，Semifold 管理独立的 `release` branch；禁止将 release branch 指向 `main`。
 - store migration 必须事务化，并在 destructive migration 前创建 catalog 备份。
 - 原始 blob 格式尽量 append-only；新 transformer 可从旧 raw blob 重建派生数据。
 - 新 CLI schema 先以 additive 字段演进；删除/改义才升级 `schemaVersion`。

@@ -41,6 +41,8 @@ Golden outputs use [`insta`](https://insta.rs/). Run `cargo insta test` and
 The repository uses [Semifold](https://github.com/noctisynth/semifold) with the
 Rust resolver. Package versions are written explicitly in every member
 `Cargo.toml` so Semifold can update each package deterministically.
+`main` is the base branch; Semifold owns the separate `release` branch used by
+its version/publish workflow. The release branch must never be set to `main`.
 
 ```bash
 smif commit
