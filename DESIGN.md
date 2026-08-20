@@ -296,6 +296,9 @@ figstash snapshot prune
 figstash snapshot prune --execute
 
 # 本地数据
+figstash context <figma-node-url-or-file-key> [--node <node-id>] [--depth <n>]
+figstash outline <figma-url-or-file-key> [--node <node-id>] [--depth <n>]
+figstash schema [command]
 figstash node get <figma-url-or-file-key> [--node <node-id>] [--depth <n>]
 figstash node get <figma-url-or-file-key> --view raw
 figstash node search <file-key> [--name <text>] [--text <text>] [--type <type>]
@@ -328,6 +331,11 @@ figstash mcp --stdio
 - file key、branch key 和 node ID 在进入应用层前完成语法校验和 URL decode。
 - token 不允许通过命令行参数传入，防止出现在进程列表和 shell history。
 - `--snapshot` 未指定时读取对应 request profile 的本地 HEAD。
+- `context` 是 Agent 首选的 compact D2C 入口；目标必须由 URL 或 `--node` 明确到节点，缺失时返回 `node_required` 并引导调用 `outline`。
+- `outline` 是稀疏结构发现入口，默认 `--depth 2`，只返回节点标识、名称、类型、bounds、path、child count 和受深度限制的 children。
+- URL node ID 与显式 `--node` 同时存在时必须规范化后相等，否则返回 `invalid_arguments`。
+- `context`、`outline`、`schema` 和所有底层 query 永不因 cache miss 隐式联网；`snapshot_missing` 只提供显式 pull 建议。
+- `schema` 不带参数时列出机器可读的命令目录；传入稳定 command name 时返回参数/结果 schema、错误、网络和本地写入效果及示例。
 - 全局 `--offline` 使所有在线 command 在发送请求前返回 `offline_mode`；本地 query 行为不变。
 
 ### 9.3 stdout/stderr 规范
@@ -431,6 +439,9 @@ Online commands：
 
 Local queries/commands：
 
+- `ContextGet`
+- `OutlineGet`
+- `SchemaGet`
 - `SnapshotStatus/List/Diff/PrunePlan`
 - `NodeGet/Search`
 - `TokensGet`
@@ -472,6 +483,8 @@ Agent
   -> Transformer: compact or raw view
   -> CLI: JSON envelope with network.attempts = 0
 ```
+
+`context` 复用相同的 local query service，但固定 compact view、要求显式 node，并把目标子树实际引用的 named styles、derived global vars、components 和 component sets 一并返回。`outline` 复用 node index 构建稀疏树，不加载 Paint、Effect、typography、component overrides 或 vector path payload。两者的应用服务均不持有网络 gateway。
 
 ## 11. Figma 数据模型与解析
 
