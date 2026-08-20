@@ -174,6 +174,18 @@
 - [x] 编写最小 Agent 使用说明和 JSON schema 索引。
 - [x] 验证单次 compact `node get` 同时返回目标子树及其引用的 styles、派生变量和 components，形成零网络的单向 D2C handoff。
 
+### P0.13 Agent 高层语义接口
+
+- [x] 实现 `figstash context <target>`，固定 compact view 并返回节点与引用闭包。
+- [x] `context` 缺少 URL node ID 和 `--node` 时返回稳定的 `node_required`，不读取完整文件。
+- [x] 实现 `figstash outline <target>` 稀疏树，默认 `--depth 2`。
+- [x] 实现 `figstash schema [command]` 的机器可读命令目录和详细契约。
+- [x] 保留 `node get/search`、`tokens get` 和 `components list` 作为底层 primitives。
+- [x] 为三条高层命令建立 JSON Schema、CLI contract、零网络和参数冲突测试。
+- [x] 验证新增接口只复用既有 snapshot，不触发 pull 或改变 HEAD。
+
+验收：Agent 可通过 `outline -> context` 完成节点发现与单向 D2C handoff；不了解节点时不会意外输出整个文件，所有高层 query 的 `meta.network.attempts` 为零。
+
 P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓存 Figma 文件；除显式 pull 外不存在 Tier 1 路径。
 
 ## P1 — 核心完整性、稳定性与性能

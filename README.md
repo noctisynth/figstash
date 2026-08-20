@@ -40,6 +40,9 @@ P1 metadata probe exists, an ordinary pull of an already cached lineage returns
 All of these commands are pure local reads after a snapshot exists:
 
 ```bash
+figstash outline FILE_KEY
+figstash context 'https://www.figma.com/design/FILE_KEY/Name?node-id=2-1'
+figstash schema context
 figstash node get FILE_KEY --node 2:1 --depth 2
 figstash node get 'https://www.figma.com/design/FILE_KEY/Name?node-id=2-1' --view raw
 figstash node search FILE_KEY --name Card --type FRAME
@@ -52,11 +55,11 @@ figstash snapshot prune
 figstash quota status
 ```
 
-For the one-way design-to-code handoff, give the Agent the complete JSON from a
-targeted compact query:
+For the one-way design-to-code handoff, `context` is the preferred Agent-facing
+shortcut:
 
 ```bash
-figstash node get 'https://www.figma.com/design/FILE_KEY/Name?node-id=2-1'
+figstash context 'https://www.figma.com/design/FILE_KEY/Name?node-id=2-1'
 ```
 
 `data.node` contains the normalized node subtree. `data.references` contains
@@ -64,6 +67,12 @@ the named styles, repeated local design values, components, and component sets
 actually referenced by that subtree. This handoff is fully local after the
 snapshot pull; code generation remains the responsibility of the consuming
 Agent and does not trigger a Figma request.
+
+`context` requires a node in the URL or through `--node`; it never dumps a whole
+file implicitly. Use `outline` first when the node is unknown. Its default depth
+of two returns the document, pages, and their top-level nodes without loading
+styling payloads. `schema` lists or describes the stable machine-readable CLI
+contracts, for example `figstash schema snapshot.pull`.
 
 `snapshot prune` only plans deletion. `snapshot prune --execute` performs the
 reported permanent deletion and never removes the sole snapshot or a current
