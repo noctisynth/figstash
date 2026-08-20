@@ -1,0 +1,9 @@
+---
+source: crates/figstash-query/tests/snapshot_harness.rs
+expression: conventions
+---
+{
+  "inputs": "fixtures/figma",
+  "outputs": "tests/snapshots",
+  "updates": "explicit-review"
+}

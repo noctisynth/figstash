@@ -236,8 +236,9 @@ figstash/
 ├── schemas/
 │   └── cli/v1/              # 命令输出 JSON Schema
 ├── fixtures/
-│   ├── figma/               # 脱敏 REST 响应
-│   └── golden/              # 期望 compact context
+│   └── figma/               # 脱敏或合成的 REST 输入
+├── crates/*/tests/
+│   └── snapshots/           # insta 管理的预期输出
 └── xtask/                   # schema 校验、fixture 维护、发布检查
 ```
 
@@ -265,7 +266,7 @@ P2/P3 crate 在对应阶段开始前不创建空壳，避免提前固化无用�
 | 配置路径 | `directories` | OS 标准 data/config 目录 |
 | Secret | `secrecy`、`zeroize`、系统 keyring adapter | 防止 token 进入 Debug/日志；PAT 不写普通配置 |
 | 日志/错误 | `tracing`、`thiserror` | 结构化诊断与稳定错误映射 |
-| 测试 | `tempfile`、`assert_cmd`、HTTP mock、snapshot/golden test | 全链路离线测试 |
+| 测试 | `insta`、`tempfile`、`assert_cmd`、HTTP mock | 可 review 的 golden snapshot 与全链路离线测试 |
 
 依赖版本由 `Cargo.lock` 固定；方案文档不绑定易过期的具体 patch 版本。
 
@@ -803,7 +804,10 @@ GetFileMeta   -> Tier3
 
 ### 20.3 Golden/契约测试
 
-- 对脱敏 Figma fixture 固定 compact context、tokens 和 components 输出；
+- `fixtures/figma` 只保存脱敏或合成的输入；golden 输出使用 `insta` 的 `.snap` 文件，并放在对应 crate 的 `tests/snapshots`；
+- 对脱敏 Figma fixture 固定 compact context、tokens 和 components 输出；JSON 输出使用 `assert_json_snapshot!`；
+- snapshot 前统一规范化或 redact 时间戳、signed URL、request ID、绝对路径等易变字段；token 不得进入 snapshot pipeline；
+- snapshot 更新必须经 `cargo insta review` 人工确认并提交；CI 使用 `INSTA_UPDATE=no`，不得自动接受新输出；
 - 每个 CLI 命令输出通过 `schemas/cli/v1` 校验；
 - 用 feature-parity fixture 覆盖旧项目支持的布局、文字、Paint、effect、component 和 image reference；
 - 新官方 schema fixture 加入时，未知字段必须在 raw view 保留。

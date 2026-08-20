@@ -6,5 +6,5 @@
 !.env.example
 
 *.profraw
+*.snap.new
 /coverage/
-

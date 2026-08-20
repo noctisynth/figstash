@@ -20,6 +20,7 @@ figstash-core = { path = "crates/figstash-core" }
 figstash-figma = { path = "crates/figstash-figma" }
 figstash-query = { path = "crates/figstash-query" }
 figstash-store = { path = "crates/figstash-store" }
+insta = { version = "1.48.0", default-features = false, features = ["json", "redactions"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"
@@ -35,4 +36,3 @@ unwrap_used = "deny"
 codegen-units = 1
 lto = "thin"
 strip = "symbols"
-

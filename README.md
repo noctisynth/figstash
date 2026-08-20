@@ -15,7 +15,8 @@ Desktop, load a Figma plugin, or provide a remote service.
 - `crates/figstash-query`: offline transforms and queries
 - `crates/figstash-cli`: the `figstash` executable
 - `schemas/cli/v1`: versioned Agent-facing JSON schemas
-- `fixtures`: sanitized Figma inputs and golden outputs
+- `fixtures/figma`: sanitized or synthetic Figma input payloads
+- `crates/*/tests/snapshots`: reviewed `insta` golden outputs
 
 P2/P3 crates for SVG, visual regression, and MCP will only be added when those
 phases begin.
@@ -31,6 +32,9 @@ cargo test --workspace --all-targets --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
+Golden outputs use [`insta`](https://insta.rs/). Run `cargo insta test` and
+`cargo insta review` when intentionally updating them. Raw Figma inputs stay in
+`fixtures/figma`; generated `.snap` files live beside the tests that own them.
+
 See [DESIGN.md](./DESIGN.md) for the technical design and
 [TODO.md](./TODO.md) for the prioritized implementation plan.
-

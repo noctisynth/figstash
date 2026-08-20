@@ -17,7 +17,7 @@
 - [x] 配置 `rustfmt`、Clippy、单元测试和文档检查。
 - [ ] 配置 CI：format、clippy、test、JSON Schema contract test。
 - [ ] 加入 secret scanning 和依赖许可证/漏洞检查。
-- [x] 建立 `fixtures/figma`、`fixtures/golden` 和 `schemas/cli/v1`。
+- [x] 建立 `fixtures/figma`、`schemas/cli/v1` 和 `insta` snapshot 约定。
 
 验收：空功能 workspace 在 macOS/Linux CI 全绿；任何 crate 不得反向依赖 CLI。
 
@@ -146,9 +146,9 @@
 - [ ] 实现 `figstash tokens get`。
 - [ ] 实现 `figstash components list`，包含 component sets 和 instance usage。
 - [ ] 保留 raw view 作为无损出口。
-- [ ] 为所有核心节点类型建立 golden fixtures。
+- [ ] 为所有核心节点类型建立 `insta` golden snapshots。
 
-验收：输出覆盖被审计项目的 metadata/nodes/globalVars/components/componentSets 能力；golden test 稳定。
+验收：输出覆盖被审计项目的 metadata/nodes/globalVars/components/componentSets 能力；`insta` snapshot test 稳定。
 
 ### P0.11 快照管理和诊断
 
