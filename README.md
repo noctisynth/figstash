@@ -1,0 +1,36 @@
+# Figstash
+
+Figstash is a local-first, quota-aware Figma data CLI designed for software
+agents. The repository is currently at the workspace-bootstrap stage; product
+behavior has not been implemented yet.
+
+The project is a new Rust implementation. It does not inject code into Figma
+Desktop, load a Figma plugin, or provide a remote service.
+
+## Repository layout
+
+- `crates/figstash-core`: domain and application contracts
+- `crates/figstash-figma`: Figma REST boundary
+- `crates/figstash-store`: durable local snapshot storage
+- `crates/figstash-query`: offline transforms and queries
+- `crates/figstash-cli`: the `figstash` executable
+- `schemas/cli/v1`: versioned Agent-facing JSON schemas
+- `fixtures`: sanitized Figma inputs and golden outputs
+
+P2/P3 crates for SVG, visual regression, and MCP will only be added when those
+phases begin.
+
+## Development
+
+The workspace uses Rust edition 2024 and has an MSRV of Rust 1.85.
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+```
+
+See [DESIGN.md](./DESIGN.md) for the technical design and
+[TODO.md](./TODO.md) for the prioritized implementation plan.
+

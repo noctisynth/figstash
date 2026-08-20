@@ -1,0 +1,322 @@
+# Figstash TODO
+
+> 排序规则：P0 必须按顺序完成；P1 在核心 CLI 可用后收敛完整性；P2 才进入 SVG/图片/视觉回归；P3 最后接入 MCP。  
+> 技术契约以 [DESIGN.md](./DESIGN.md) 为准。任务完成必须同时满足实现、测试和文档，不以“代码已写”单独判定完成。
+
+## P0 — 核心 Agent CLI（最高优先级）
+
+### P0.1 建立工程和质量门禁
+
+- [x] 创建 Rust workspace 与以下初始 crates：
+  - [x] `figstash-core`
+  - [x] `figstash-figma`
+  - [x] `figstash-store`
+  - [x] `figstash-query`
+  - [x] `figstash-cli`
+- [x] 固定 Rust edition、MSRV 和 workspace dependency policy。
+- [x] 配置 `rustfmt`、Clippy、单元测试和文档检查。
+- [ ] 配置 CI：format、clippy、test、JSON Schema contract test。
+- [ ] 加入 secret scanning 和依赖许可证/漏洞检查。
+- [x] 建立 `fixtures/figma`、`fixtures/golden` 和 `schemas/cli/v1`。
+
+验收：空功能 workspace 在 macOS/Linux CI 全绿；任何 crate 不得反向依赖 CLI。
+
+### P0.2 固化 Agent CLI 响应契约
+
+- [ ] 在 `figstash-core` 定义成功/失败 JSON envelope。
+- [ ] 定义 `schemaVersion = 1` 和 command-specific `data` schema。
+- [ ] 定义稳定的 `error.code` taxonomy。
+- [ ] 实现 exit code 映射。
+- [ ] 拦截 CLI 参数解析错误并转换为 JSON，禁止 Clap 默认文本污染 stdout。
+- [ ] 确保 stdout 恰好一个 JSON object；日志只进入 stderr。
+- [ ] 加入 stdout/stderr/exit code 端到端测试。
+
+验收：成功、参数错误和内部错误均能被 `serde_json` 直接解析，并通过对应 schema。
+
+### P0.3 配置、认证与 secret hygiene
+
+- [ ] 实现 OS 标准 data/config 目录解析。
+- [ ] 支持 `FIGSTASH_DATA_DIR` 和 `FIGSTASH_CONFIG_DIR`。
+- [ ] 实现配置优先级：CLI > env > config > default。
+- [ ] 实现 `FIGMA_TOKEN` token source，并明确将其解释为 PAT。
+- [ ] 定义显式 credential kind；禁止从 token 内容猜测认证类型。
+- [ ] 实现系统 keyring adapter。
+- [ ] 实现：
+  - [ ] `figstash auth set --stdin`
+  - [ ] `figstash auth status`
+  - [ ] `figstash auth clear`
+- [ ] `auth status` 仅报告 credential kind/source/presence，不回显 token，也不伪装成远端 scope 验证。
+- [ ] 使用 secret wrapper，验证 Debug/log/错误不会出现 token。
+- [ ] 创建 data dir 时设置当前用户权限。
+
+验收：token 不出现在 argv、stdout、stderr、配置文件、SQLite 和测试 snapshot 中。
+
+### P0.4 Figma URL 与标识符解析
+
+- [ ] 支持 design/file/FigJam/branch URL 和直接 file key。
+- [ ] 解析 query 中的 `node-id`。
+- [ ] 规范化 `1234-5678` 与 `1234:5678`。
+- [ ] 校验 URL host、file key、branch key 和 node ID。
+- [ ] 为 URL decode、无效输入和历史 URL 形式建立 fixture。
+
+验收：所有后续命令共享同一个 parser；不得在 command handler 中重复字符串切割。
+
+### P0.5 配额感知的 Figma gateway
+
+- [ ] 定义封闭的 endpoint class 与 Tier 枚举。
+- [ ] 未知 endpoint fail closed。
+- [ ] 使用 `reqwest` + rustls 构建唯一 HTTP gateway。
+- [ ] 实现 credential-aware headers：PAT/plan token 使用 `X-Figma-Token`；OAuth access token 使用 `Authorization: Bearer`。
+- [ ] 实现 timeout、代理继承和安全 redirect policy。
+- [ ] 实现 Tier 1 零自动重试策略。
+- [ ] 实现 Tier 2/3 最多一次安全重试策略。
+- [ ] 解析 403/404/429/5xx 和 Figma rate-limit headers。
+- [ ] 每次 attempt 写入本地请求账本。
+- [ ] 建立 mock transport；测试中禁止直接连接真实 Figma。
+
+验收：代码库中只有 gateway crate 能构造 Figma HTTP 请求；Tier 分类具有穷尽测试。
+
+### P0.6 Durable snapshot store
+
+- [ ] 创建 `store-v1` 目录布局。
+- [ ] 初始化 SQLite schema 与 migration runner。
+- [ ] 实现 content-addressed zstd blob store。
+- [ ] 实现原始响应的流式落盘、BLAKE3 和完整 JSON 校验。
+- [ ] 实现 snapshot manifest、request profile 和 HEAD。
+- [ ] 实现 per-file/profile 跨进程锁。
+- [ ] 实现 staging -> transaction -> HEAD 原子提交。
+- [ ] 实现启动时 orphan staging 检测和安全回收。
+- [ ] 实现 catalog 备份钩子。
+
+验收：在下载、解析、索引和提交的每个故障点中断进程，旧 HEAD 均保持可读。
+
+### P0.7 完整文件拉取
+
+- [ ] 实现 `GET /v1/files/:key` client。
+- [ ] 支持完整文件、指定 Figma version 和 `geometry=paths` profile。
+- [ ] 实现 `figstash snapshot pull` 首次拉取。
+- [ ] 实现 `snapshot pull --force`。
+- [ ] 禁止使用 `GET file nodes` 作为 node miss 回退。
+- [ ] 保存 Figma version、lastModified、components、componentSets、styles 和原始 payload。
+- [ ] 输出实际 Tier 调用数量和 source。
+- [ ] 添加 200/403/404/429/5xx/timeout/truncated JSON 集成测试。
+
+验收：一次成功 pull 只产生一次 Tier 1；失败 pull 不移动 HEAD；结果 envelope 正确报告请求。
+
+### P0.8 节点索引和 schema-tolerant parser
+
+- [ ] 定义关键强类型字段和未知字段保留策略。
+- [ ] 遍历 DOCUMENT/CANVAS/children 并保持稳定顺序。
+- [ ] 写入 node、parent、depth、path、bounds、component relation。
+- [ ] 保存每个节点原始 JSON blob。
+- [ ] 计算确定性的 subtree hash。
+- [ ] 建立 name/text FTS5 索引。
+- [ ] 对未知 node type 生成 warning，但继续提交快照。
+- [ ] 加入 1k/10k/100k 节点合成 fixture。
+
+验收：任意 node ID 可直接定位；重新索引同一 raw blob 产生相同 node/subtree hashes。
+
+### P0.9 本地节点读取与搜索
+
+- [ ] 实现 `figstash node get`：
+  - [ ] URL 中 node ID
+  - [ ] `--node`
+  - [ ] 文件根节点
+  - [ ] `--depth`
+  - [ ] `--view compact|raw`
+  - [ ] 指定 snapshot
+- [ ] 实现 `figstash node search`：
+  - [ ] name
+  - [ ] text
+  - [ ] type
+  - [ ] ancestor scope
+  - [ ] limit/cursor
+- [ ] 缓存 miss 返回 `snapshot_missing`。
+- [ ] node miss 返回 `node_not_found` 和本地候选，不访问网络。
+- [ ] 对所有 query 注入 network-deny transport 并断言零请求。
+
+验收：准备快照后，断网环境下所有 node get/search fixture 通过。
+
+### P0.10 Compact context、tokens 与 components
+
+- [ ] 实现 compact node transformer。
+- [ ] 覆盖 layout、auto-layout、bounds、constraints、Paint、stroke、effect、text 和 instance。
+- [ ] 从重复值派生稳定 globalVars。
+- [ ] 将 named styles 与 derived globalVars 分开标记。
+- [ ] 实现 `figstash tokens get`。
+- [ ] 实现 `figstash components list`，包含 component sets 和 instance usage。
+- [ ] 保留 raw view 作为无损出口。
+- [ ] 为所有核心节点类型建立 golden fixtures。
+
+验收：输出覆盖被审计项目的 metadata/nodes/globalVars/components/componentSets 能力；golden test 稳定。
+
+### P0.11 快照管理和诊断
+
+- [ ] 实现 `figstash snapshot status`。
+- [ ] 实现 `figstash snapshot list`。
+- [ ] 实现 `figstash snapshot prune` 删除计划。
+- [ ] 实现 `snapshot prune --execute` 和无引用 blob GC。
+- [ ] 实现 `figstash quota status`，明确 `figstash_observed_only`。
+- [ ] 实现 `figstash doctor` 的本地检查。
+- [ ] 实现 `figstash doctor --network`，在输出中标明 endpoint/Tier。
+- [ ] 确保不会自动删除某文件的唯一可用快照。
+
+验收：列表、状态、计划和执行结果全部可由 Agent 解析；删除结果包含删除对象和可恢复性。
+
+### P0.12 核心端到端验收
+
+- [ ] 建立完整场景：auth -> pull -> node get/search -> tokens -> components -> status/prune plan。
+- [ ] 记录每一步预期 API 请求数。
+- [ ] 验证 pull 后在完全断网环境重复执行 1,000 次 local query，网络请求为零。
+- [ ] 验证 stdout 没有非 JSON 字节。
+- [ ] 验证 token 和 signed URL query 不进入日志。
+- [ ] 编写最小 Agent 使用说明和 JSON schema 索引。
+
+P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓存 Figma 文件；除显式 pull 外不存在 Tier 1 路径。
+
+## P1 — 核心完整性、稳定性与性能
+
+### P1.1 Metadata 变更探测
+
+- [ ] 实现 `GET /v1/files/:key/meta` Tier 3 client。
+- [ ] 已有快照的普通 pull 先比较 version。
+- [ ] metadata unchanged 时 Tier 1 为零。
+- [ ] metadata scope 缺失时 fail closed，提示 `--force`。
+- [ ] 增加 unchanged/changed/missing-scope 请求次数测试。
+
+### P1.2 Snapshot diff
+
+- [ ] 实现 `figstash snapshot diff`。
+- [ ] 输出 added/removed/changed/moved nodes。
+- [ ] 区分 node 自身字段变化和 descendant-only 变化。
+- [ ] 支持按 node/type/path 限定。
+- [ ] 为重命名、移动、style/component 变化建立 fixture。
+
+### P1.3 Cache policy 与迁移
+
+- [ ] 实现可选 `stale_after`，只影响状态。
+- [ ] 实现 SQLite migration 备份、校验和、rollback-on-failure。
+- [ ] 实现从 raw blob 全量重建派生索引。
+- [ ] 实现 store integrity check/repair plan。
+- [ ] 设计并测试旧 binary 遇到新 store schema 的只读失败行为。
+
+### P1.4 大文件与并发
+
+- [ ] 建立真实脱敏大型 fixture。
+- [ ] 测量 pull、index、node get、search 的时间/峰值内存/磁盘。
+- [ ] 优化流式解析和 node blob 写入热点。
+- [ ] 验证两个进程并发 pull 最多一次 Tier 1。
+- [ ] 验证磁盘满、kill -9、SQLite busy 和 blob 损坏场景。
+- [ ] 基于数据写入可执行 performance budget。
+
+### P1.5 Feature parity 收敛
+
+- [ ] 将被审计项目所有公开能力逐项转成 acceptance fixture。
+- [ ] 核对 URL/node/depth/cacheDir/force refresh 行为覆盖。
+- [ ] 核对所有现有 Figma node、Paint、effect 和 component 类型。
+- [ ] 输出明确的 parity report；不将 transport/name compatibility 计为缺口。
+
+### P1.6 平台和发布准备
+
+- [ ] macOS arm64/x86_64 测试与发布产物。
+- [ ] Linux x86_64/arm64 测试。
+- [ ] Windows data dir、ACL、keyring 和 SQLite 行为验证。
+- [ ] 确认开源许可证。
+- [ ] 保留 GitHub/crates.io 项目名。
+- [ ] 建立 release checklist、SBOM、checksum 和签名策略。
+
+P1 完成定义：核心 CLI 对真实大型文件、崩溃、并发、schema drift 和升级具备可验证的稳定性。
+
+## P2 — SVG、图片和视觉回归（核心 CLI 后）
+
+### P2.1 Geometry SVG compositor
+
+- [ ] 解析 geometry snapshot 的 fill/stroke paths、winding rule 和 transforms。
+- [ ] 实现 solid/gradient fills、stroke、opacity 和基础 effects。
+- [ ] 实现 clip、mask、boolean/compound paths。
+- [ ] 输出独立 `image/svg+xml` 和 fidelity/warning metadata。
+- [ ] 对 unsupported 特性返回明确状态，不静默近似。
+
+### P2.2 Figma-rendered SVG snapshot
+
+- [ ] 实现 `svg sync --plan`，计算 Tier 1 批次数。
+- [ ] 实现 `svg sync --execute`，固定 Figma version。
+- [ ] 使用 `svg_include_node_id=true` 和 outlined text。
+- [ ] 下载并持久化实际 SVG 字节。
+- [ ] 建立 `node_id -> root SVG/element` 索引。
+
+### P2.3 本地 SVG 切片
+
+- [ ] 实现 ancestor transform/style/opacity 继承。
+- [ ] 实现 clip/mask/filter/gradient/pattern/symbol dependency closure。
+- [ ] 重写内部 ID，避免切片组合冲突。
+- [ ] 内联图片；移除 script、event handler、external entity/URL。
+- [ ] 实现 `isolated` 与 `contextual`。
+- [ ] 输出 exact/context-dependent/locally-composed/unsupported。
+
+### P2.4 Image fills 与节点 render
+
+- [ ] 实现 Tier 2 image fills listing/fetch。
+- [ ] 下载实际字节并用内容 hash 去重。
+- [ ] 实现 `render plan`，按格式/scale/options 分组和拆批。
+- [ ] 实现 `render run`，只执行持久化 plan。
+- [ ] 固定 snapshot version，避免 JSON/图片版本错位。
+- [ ] PNG/SVG/JPG/PDF 部分失败必须逐 node 报告。
+
+### P2.5 本地视觉回归
+
+- [ ] 实现 SVG -> PNG 本地渲染。
+- [ ] 实现 `visual capture`，明确数据来源和是否发生远端请求。
+- [ ] 建立复杂 SVG/Figma export 基准 fixture。
+- [ ] 研究并通过 ADR 确定 diff metric、抗锯齿容差和默认阈值。
+- [ ] 实现 `visual compare` 的差异图片和机器可读指标。
+
+P2 完成定义：Agent 能在不隐式消耗配额的前提下获取节点视觉资产并进行本地视觉比较。
+
+## P3 — MCP stdio 适配
+
+### P3.1 MCP 契约
+
+- [ ] 基于稳定 application services 设计 tool/resource 粒度。
+- [ ] 所有 local tools 明确零网络。
+- [ ] 所有 online tools 在名称、description 和结果中展示 Tier 成本。
+- [ ] 定义 SVG/图片 resource URI 和生命周期。
+- [ ] 不继承旧项目工具名或输出兼容层。
+
+### P3.2 Rust SDK 与实现
+
+- [ ] 固定官方 `rmcp` 稳定版本。
+- [ ] 只启用 server + stdio 所需 features。
+- [ ] 实现 `figstash mcp --stdio`。
+- [ ] handler 直接调用 application service，不 spawn CLI。
+- [ ] stdout 只包含 MCP JSON-RPC；日志进入 stderr。
+- [ ] 添加 protocol、tool schema、resource 和错误映射测试。
+
+### P3.3 客户端验收
+
+- [ ] MCP Inspector stdio 测试。
+- [ ] Codex/Claude Code/Cursor 中至少各验证一个支持的客户端。
+- [ ] 验证大节点响应、resource、取消和并发查询。
+- [ ] 验证 MCP 反复 query 不产生 Figma 请求。
+- [ ] 编写最小配置示例和故障排查。
+
+P3 完成定义：MCP 与 CLI 结果来自同一快照和应用服务，且不会引入新的网络或缓存语义。
+
+## P4 — 可选增强（不进入 v1 阻塞路径）
+
+- [ ] OAuth 浏览器授权和 refresh token 生命周期。
+- [ ] Figma Variables 远端读取与本地快照化。
+- [ ] 多文件 design-system 跨文件索引。
+- [ ] 更细粒度的 Agent pagination/streaming 协议。
+- [ ] 本地 Web UI（若未来明确提出；当前不在范围）。
+- [ ] 插件/画布写入能力（当前明确不做，除非产品边界重新确认）。
+
+## 每次 PR 的统一完成条件
+
+- [ ] 对应 DESIGN 契约未被无意改变；若改变，先更新 ADR/DESIGN。
+- [ ] 单元、集成、contract 和相关 golden 测试通过。
+- [ ] 新增网络路径具有 endpoint/Tier 分类和请求次数测试。
+- [ ] 新增本地 query 具有“网络即失败”测试。
+- [ ] stdout/stderr 和 secret redaction 测试通过。
+- [ ] 不引入未说明的自动刷新、自动重试或自动删除。
+- [ ] TODO 状态和下一依赖任务已更新。

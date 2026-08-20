@@ -1,0 +1,21 @@
+[package]
+name = "figstash-cli"
+description = "Agent-facing command-line interface for Figstash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "figstash"
+path = "src/main.rs"
+
+[dependencies]
+figstash-core.workspace = true
+figstash-figma.workspace = true
+figstash-query.workspace = true
+figstash-store.workspace = true
+
+[lints]
+workspace = true
+
