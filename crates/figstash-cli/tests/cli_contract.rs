@@ -65,6 +65,35 @@ fn every_core_local_command_emits_one_schema_valid_json_object() {
 }
 
 #[test]
+fn compact_node_is_a_self_contained_agent_d2c_context() {
+    let (temporary, _store, _summary) = prepared_store();
+    let output = run_cli(
+        temporary.path(),
+        &["node", "get", FILE_KEY, "--node", "2:1"],
+    );
+    assert!(output.status.success());
+    let response = parse_single_stdout(&output);
+    assert_eq!(response["meta"]["source"], "cache");
+    assert_eq!(response["meta"]["network"]["attempts"], 0);
+    assert_eq!(response["data"]["node"]["id"], "2:1");
+    assert_eq!(
+        response["data"]["references"]["namedStyles"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    assert!(
+        response["data"]["references"]["globalVars"]
+            .as_array()
+            .is_some_and(|variables| !variables.is_empty())
+    );
+    validate_schema(
+        include_str!("../../../schemas/cli/v1/node.get.schema.json"),
+        &response["data"],
+    );
+}
+
+#[test]
 fn argument_and_cache_miss_failures_are_json_with_stable_exit_codes() {
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));

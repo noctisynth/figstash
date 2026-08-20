@@ -9,6 +9,7 @@ mod transform;
 
 pub use parser::parse_file;
 pub use service::{
-    ComponentsData, NodeGetData, NodeGetOptions, QueryService, SearchData, TokensData, View,
+    ComponentsData, NodeGetData, NodeGetOptions, NodeReferences, QueryService, SearchData,
+    TokensData, View,
 };
 pub use transform::{CompactNode, DerivedVariable, TokenReference};

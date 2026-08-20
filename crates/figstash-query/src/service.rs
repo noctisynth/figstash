@@ -7,7 +7,7 @@ use figstash_core::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Node rendering mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,23 @@ pub struct NodeGetData {
     pub snapshot: SnapshotSummary,
     /// Compact or raw node tree.
     pub node: Value,
+    /// Referenced design-system context for compact output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references: Option<NodeReferences>,
+}
+
+/// Design-system entities referenced by a compact node subtree.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeReferences {
+    /// Named styles referenced by nodes in the returned subtree.
+    pub named_styles: Vec<IndexedEntity>,
+    /// Repeated values referenced by nodes in the returned subtree.
+    pub global_vars: Vec<DerivedVariable>,
+    /// Component metadata referenced by instances or definitions in the subtree.
+    pub components: Vec<IndexedEntity>,
+    /// Component-set metadata whose definition nodes are in the subtree.
+    pub component_sets: Vec<IndexedEntity>,
 }
 
 /// Data returned by `node search`.
@@ -106,14 +123,31 @@ where
             Some(node_id) => node_id.to_owned(),
             None => self.repository.root_node_id(&snapshot.id)?,
         };
-        let node = match options.view {
+        let (node, references) = match options.view {
             View::Compact => {
-                serde_json::to_value(self.load_compact(&snapshot.id, &node_id, options.depth, 0)?)
-                    .map_err(|error| serialization_error(&error))?
+                let mut selected_nodes = Vec::new();
+                let node = self.load_compact(
+                    &snapshot.id,
+                    &node_id,
+                    options.depth,
+                    0,
+                    &mut selected_nodes,
+                )?;
+                (
+                    serde_json::to_value(node).map_err(|error| serialization_error(&error))?,
+                    Some(self.node_references(&snapshot.id, &selected_nodes)?),
+                )
             }
-            View::Raw => self.load_raw(&snapshot.id, &node_id, options.depth, 0)?,
+            View::Raw => (
+                self.load_raw(&snapshot.id, &node_id, options.depth, 0)?,
+                None,
+            ),
         };
-        Ok(NodeGetData { snapshot, node })
+        Ok(NodeGetData {
+            snapshot,
+            node,
+            references,
+        })
     }
 
     /// Searches one immutable snapshot without any cache-miss fallback.
@@ -184,8 +218,10 @@ where
         node_id: &str,
         max_depth: Option<u32>,
         current_depth: u32,
+        selected_nodes: &mut Vec<StoredNode>,
     ) -> AppResult<CompactNode> {
         let node = self.load_node_with_candidates(snapshot_id, node_id)?;
+        selected_nodes.push(node.clone());
         let mut children = Vec::new();
         if max_depth.is_none_or(|maximum| current_depth < maximum) {
             for child_id in &node.child_ids {
@@ -194,10 +230,68 @@ where
                     child_id,
                     max_depth,
                     current_depth + 1,
+                    selected_nodes,
                 )?);
             }
         }
         Ok(compact_node(&node, children))
+    }
+
+    fn node_references(
+        &self,
+        snapshot_id: &str,
+        selected_nodes: &[StoredNode],
+    ) -> AppResult<NodeReferences> {
+        let selected_ids = selected_nodes
+            .iter()
+            .map(|node| node.index.node_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let style_ids = selected_nodes
+            .iter()
+            .flat_map(style_references)
+            .collect::<BTreeSet<_>>();
+        let component_ids = selected_nodes
+            .iter()
+            .filter_map(|node| node.index.component_id.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        let named_styles = self
+            .repository
+            .load_styles(snapshot_id)?
+            .into_iter()
+            .filter(|style| style_ids.contains(style.id.as_str()))
+            .collect();
+        let components = self
+            .repository
+            .load_components(snapshot_id)?
+            .into_iter()
+            .filter(|component| {
+                component_ids.contains(component.id.as_str())
+                    || component
+                        .node_id
+                        .as_deref()
+                        .is_some_and(|node_id| selected_ids.contains(node_id))
+            })
+            .collect();
+        let component_sets = self
+            .repository
+            .load_component_sets(snapshot_id)?
+            .into_iter()
+            .filter(|component_set| {
+                component_set
+                    .node_id
+                    .as_deref()
+                    .is_some_and(|node_id| selected_ids.contains(node_id))
+            })
+            .collect();
+        let global_vars = derive_variables(selected_nodes)?;
+
+        Ok(NodeReferences {
+            named_styles,
+            global_vars,
+            components,
+            component_sets,
+        })
     }
 
     fn load_raw(
@@ -250,6 +344,17 @@ where
             Err(error) => Err(error),
         }
     }
+}
+
+fn style_references(node: &StoredNode) -> Vec<&str> {
+    node.index
+        .raw
+        .get("styles")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|styles| styles.values())
+        .filter_map(Value::as_str)
+        .collect()
 }
 
 fn serialization_error(error: &serde_json::Error) -> AppError {

@@ -47,6 +47,33 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
         })
         .unwrap_or_else(|error| panic!("compact query failed: {error}"));
     insta::assert_json_snapshot!("compact_card", compact.node);
+    let references = compact
+        .references
+        .unwrap_or_else(|| panic!("compact output must include referenced design context"));
+    assert_eq!(
+        references
+            .named_styles
+            .iter()
+            .map(|style| style.id.as_str())
+            .collect::<Vec<_>>(),
+        ["style-effect-1", "style-fill-1", "style-text-1"]
+    );
+    assert!(!references.global_vars.is_empty());
+    insta::assert_json_snapshot!("d2c_card_references", references);
+
+    let instance = service
+        .node_get(NodeGetOptions {
+            selector: selector(),
+            node_id: Some("4:1"),
+            depth: None,
+            view: View::Compact,
+        })
+        .unwrap_or_else(|error| panic!("instance query failed: {error}"));
+    let instance_references = instance
+        .references
+        .unwrap_or_else(|| panic!("instance output must include component context"));
+    assert_eq!(instance_references.components.len(), 1);
+    assert_eq!(instance_references.components[0].id, "3:1");
 
     let raw = service
         .node_get(NodeGetOptions {
@@ -57,6 +84,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
         })
         .unwrap_or_else(|error| panic!("raw query failed: {error}"));
     assert_eq!(raw.node["futurePayload"]["preserved"], true);
+    assert!(raw.references.is_none());
 
     let search = service
         .node_search(

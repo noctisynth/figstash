@@ -1,0 +1,127 @@
+---
+source: crates/figstash-query/tests/offline_queries.rs
+expression: references
+---
+{
+  "namedStyles": [
+    {
+      "id": "style-effect-1",
+      "nodeId": null,
+      "name": "Elevation/Card",
+      "entityType": "style",
+      "raw": {
+        "key": "effect-key",
+        "name": "Elevation/Card",
+        "styleType": "EFFECT"
+      }
+    },
+    {
+      "id": "style-fill-1",
+      "nodeId": null,
+      "name": "Surface/Primary",
+      "entityType": "style",
+      "raw": {
+        "key": "fill-key",
+        "name": "Surface/Primary",
+        "styleType": "FILL"
+      }
+    },
+    {
+      "id": "style-text-1",
+      "nodeId": null,
+      "name": "Heading/Medium",
+      "entityType": "style",
+      "raw": {
+        "key": "text-key",
+        "name": "Heading/Medium",
+        "styleType": "TEXT"
+      }
+    }
+  ],
+  "globalVars": [
+    {
+      "id": "gv_f726b7056db69c93",
+      "category": "color_or_paint",
+      "value": [
+        {
+          "color": {
+            "a": 1,
+            "b": 1,
+            "g": 1,
+            "r": 1
+          },
+          "type": "SOLID"
+        }
+      ],
+      "occurrences": 2,
+      "references": [
+        {
+          "nodeId": "2:1",
+          "field": "fills"
+        },
+        {
+          "nodeId": "2:2",
+          "field": "fills"
+        }
+      ]
+    },
+    {
+      "id": "gv_622c6455aeea8076",
+      "category": "radius",
+      "value": 12,
+      "occurrences": 2,
+      "references": [
+        {
+          "nodeId": "2:1",
+          "field": "cornerRadius"
+        },
+        {
+          "nodeId": "2:2",
+          "field": "cornerRadius"
+        }
+      ]
+    },
+    {
+      "id": "gv_f10379c9dcdefd6b",
+      "category": "spacing_or_layout",
+      "value": 16,
+      "occurrences": 4,
+      "references": [
+        {
+          "nodeId": "2:1",
+          "field": "paddingLeft"
+        },
+        {
+          "nodeId": "2:1",
+          "field": "paddingRight"
+        },
+        {
+          "nodeId": "2:1",
+          "field": "paddingTop"
+        },
+        {
+          "nodeId": "2:1",
+          "field": "paddingBottom"
+        }
+      ]
+    },
+    {
+      "id": "gv_30553f3834d1255c",
+      "category": "spacing_or_layout",
+      "value": 8,
+      "occurrences": 2,
+      "references": [
+        {
+          "nodeId": "2:1",
+          "field": "itemSpacing"
+        },
+        {
+          "nodeId": "2:2",
+          "field": "itemSpacing"
+        }
+      ]
+    }
+  ],
+  "components": [],
+  "componentSets": []
+}
