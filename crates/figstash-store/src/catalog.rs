@@ -869,7 +869,7 @@ impl SnapshotRepository for Store {
                     "The requested node does not exist in the selected snapshot.",
                 )
             })?;
-        let raw = serde_json::from_slice(&self.blobs.get(&row.14)?)
+        let raw_node = serde_json::from_slice(&self.blobs.get(&row.14)?)
             .map_err(|error| corrupt_error("A node blob does not contain valid JSON.", error))?;
         let path_ids = serde_json::from_str(&row.6).map_err(|error| {
             corrupt_error("A node path index does not contain valid JSON.", error)
@@ -907,7 +907,7 @@ impl SnapshotRepository for Store {
                 bounds,
                 component_id: row.12,
                 text_content: row.13,
-                raw,
+                raw: raw_node,
                 subtree_hash: row.15,
             },
             child_ids,
