@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["credentialKind", "credentialSource", "remoteValidated", "user"],
+  "properties": {
+    "credentialKind": { "const": "pat" },
+    "credentialSource": { "enum": ["environment", "keyring"] },
+    "remoteValidated": { "const": true },
+    "user": {
+      "type": "object",
+      "required": ["id", "handle", "email", "avatarUrl"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "handle": { "type": "string", "minLength": 1 },
+        "email": { "type": "string", "minLength": 1 },
+        "avatarUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

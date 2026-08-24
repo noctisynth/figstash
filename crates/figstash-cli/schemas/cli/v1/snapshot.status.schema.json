@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot", "stale"],
+  "properties": { "snapshot": { "type": "object" }, "stale": { "type": "boolean" } },
+  "additionalProperties": false
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["commands"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "kind", "network", "writesLocalState", "schemaVersion"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["name", "kind", "network", "writesLocalState", "inputSchema", "outputSchema", "errors", "examples"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "network": { "type": "string" },
+        "endpointClass": { "type": ["string", "null"] },
+        "tier": { "type": ["integer", "null"] },
+        "writesLocalState": { "type": "boolean" },
+        "inputSchema": { "type": "object" },
+        "outputSchema": { "type": "object" },
+        "errors": { "type": "array", "items": { "type": "string" } },
+        "examples": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

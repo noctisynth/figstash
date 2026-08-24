@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://figstash.dev/schemas/cli/v1/envelope.schema.json",
+  "title": "Figstash CLI envelope v1",
+  "type": "object",
+  "required": ["schemaVersion", "ok", "meta", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "ok": { "type": "boolean" },
+    "data": {},
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "details", "retryable"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "details": { "type": "object" },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "required": ["command", "source", "network", "traceId"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["cache", "figma", "mixed", "none"] },
+        "snapshotId": { "type": "string" },
+        "figmaVersion": { "type": "string" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "traceId": { "type": "string", "minLength": 1 },
+        "network": {
+          "type": "object",
+          "required": ["attempts", "tier1", "tier2", "tier3"],
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 0 },
+            "tier1": { "type": "integer", "minimum": 0 },
+            "tier2": { "type": "integer", "minimum": 0 },
+            "tier3": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": { "type": "array", "items": { "type": "object", "required": ["code", "message", "details"] } }
+  },
+  "oneOf": [
+    { "properties": { "ok": { "const": true } }, "required": ["data"], "not": { "required": ["error"] } },
+    { "properties": { "ok": { "const": false } }, "required": ["error"], "not": { "required": ["data"] } }
+  ],
+  "additionalProperties": false
+}

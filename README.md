@@ -145,6 +145,9 @@ smif config sync --check
 ```
 
 `smif version`, release-branch writes, and publishing run only in GitHub Actions.
+The root `schemas/cli/v1` directory is authoritative; the CLI crate contains a
+byte-identical package mirror so published source archives build independently.
+Repository tests reject drift between the two copies.
 
 ## License
 

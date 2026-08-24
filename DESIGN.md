@@ -234,7 +234,7 @@ figstash/
 │   ├── figstash-figma/      # REST、认证、URL 解析、Tier 分类
 │   ├── figstash-store/      # SQLite、blob、锁、迁移
 │   ├── figstash-query/      # 索引构建、上下文压缩、搜索、diff
-│   ├── figstash-cli/        # 唯一初始二进制
+│   ├── figstash-cli/        # 唯一初始二进制；内含可发布的 CLI schema 镜像
 │   ├── figstash-svg/        # P2
 │   ├── figstash-visual/     # P2
 │   └── figstash-mcp/        # P3
@@ -840,6 +840,7 @@ GetCurrentUser -> Tier3
 - snapshot 前统一规范化或 redact 时间戳、signed URL、request ID、绝对路径等易变字段；token 不得进入 snapshot pipeline；
 - snapshot 更新必须经 `cargo insta review` 人工确认并提交；CI 使用 `INSTA_UPDATE=no`，不得自动接受新输出；
 - 每个 CLI 命令输出通过 `schemas/cli/v1` 校验；
+- `schemas/cli/v1` 是 CLI 契约的权威来源；`figstash-cli` crate 内保存字节一致的发布镜像，运行时只嵌入该镜像，仓库测试必须阻止两处内容漂移，确保 crates.io package 不依赖 crate 根目录外的文件；
 - 用 feature-parity fixture 覆盖旧项目支持的布局、文字、Paint、effect、component 和 image reference；
 - 新官方 schema fixture 加入时，未知字段必须在 raw view 保留。
 

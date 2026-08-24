@@ -9,6 +9,47 @@ use std::process::{Command, Output};
 
 const FILE_KEY: &str = "SyntheticFileKey123";
 
+#[test]
+fn packaged_cli_schemas_match_the_authoritative_contracts() {
+    let package_schemas = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas")
+        .join("cli")
+        .join("v1");
+    let authoritative_schemas = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("schemas")
+        .join("cli")
+        .join("v1");
+
+    for entry in fs::read_dir(&authoritative_schemas)
+        .unwrap_or_else(|error| panic!("authoritative schema directory is unreadable: {error}"))
+    {
+        let entry = entry.unwrap_or_else(|error| panic!("schema entry is unreadable: {error}"));
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|error| panic!("schema entry type is unreadable: {error}"));
+        if !file_type.is_file() {
+            continue;
+        }
+        let expected = fs::read(entry.path())
+            .unwrap_or_else(|error| panic!("authoritative schema is unreadable: {error}"));
+        let packaged_path = package_schemas.join(entry.file_name());
+        let actual = fs::read(&packaged_path).unwrap_or_else(|error| {
+            panic!(
+                "packaged schema {} is unreadable: {error}",
+                packaged_path.display()
+            )
+        });
+        assert_eq!(
+            actual,
+            expected,
+            "packaged schema {} drifted",
+            packaged_path.display()
+        );
+    }
+}
+
 fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary) {
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));

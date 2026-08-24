@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot", "node"],
+  "properties": {
+    "snapshot": { "type": "object", "required": ["id", "fileKey", "figmaVersion", "requestProfile"] },
+    "node": { "type": "object" },
+    "references": {
+      "type": "object",
+      "required": ["namedStyles", "globalVars", "components", "componentSets"],
+      "properties": {
+        "namedStyles": { "type": "array", "items": { "type": "object" } },
+        "globalVars": { "type": "array", "items": { "type": "object" } },
+        "components": { "type": "array", "items": { "type": "object" } },
+        "componentSets": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["credentialKind", "source", "present", "remoteValidated"],
+  "properties": {
+    "credentialKind": { "type": ["string", "null"] },
+    "source": { "type": ["string", "null"] },
+    "present": { "type": "boolean" },
+    "remoteValidated": { "const": false }
+  },
+  "additionalProperties": false
+}

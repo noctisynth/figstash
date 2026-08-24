@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot", "components", "componentSets", "usage"],
+  "properties": {
+    "snapshot": { "type": "object" },
+    "components": { "type": "array" },
+    "componentSets": { "type": "array" },
+    "usage": { "type": "object" }
+  },
+  "additionalProperties": false
+}
