@@ -4,7 +4,11 @@ description = "Figma REST boundary for Figstash"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-publish = false
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 async-trait = "0.1.92"

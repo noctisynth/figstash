@@ -267,7 +267,9 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 - [ ] macOS arm64/x86_64 测试与发布产物。
 - [ ] Linux x86_64/arm64 测试。
 - [ ] Windows data dir、ACL、keyring 和 SQLite 行为验证。
-- [ ] 确认开源许可证。
+- [x] 确认全部 workspace package 使用 `AGPL-3.0-only`。
+- [x] 补齐 crates.io 发布元数据和内部 path dependency 的 registry 版本约束。
+- [x] 使用 Cargo metadata、`cargo package` 与逐 package `cargo publish --dry-run` 验证发布 manifest；首次发布前只有无内部依赖的 `figstash-core` 可完成完整 dry-run，其余 package 在 Cargo 确认字段有效后按预期停在 crates.io 尚无 `figstash-core`。
 - [ ] 保留 GitHub/crates.io 项目名。
 - [ ] 建立 release checklist、SBOM、checksum 和签名策略。
 

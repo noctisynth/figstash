@@ -24,6 +24,13 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
+exceptions = [
+  { allow = ["AGPL-3.0-only"], crate = "figstash-cli" },
+  { allow = ["AGPL-3.0-only"], crate = "figstash-core" },
+  { allow = ["AGPL-3.0-only"], crate = "figstash-figma" },
+  { allow = ["AGPL-3.0-only"], crate = "figstash-query" },
+  { allow = ["AGPL-3.0-only"], crate = "figstash-store" },
+]
 
 [bans]
 multiple-versions = "warn"

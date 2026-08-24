@@ -888,10 +888,13 @@ GetCurrentUser -> Tier3
 
 - CLI 与 store schema 分别版本化；二者不共享一个隐式版本号。
 - 使用 Semifold changeset 管理 workspace package 版本与 changelog；每个 member manifest 显式保存自身 `version`，不继承 `workspace.package.version`。`main` 是 base branch，Semifold 管理独立的 `release` branch；禁止将 release branch 指向 `main`。
+- `figstash-core`、`figstash-store`、`figstash-query`、`figstash-figma` 和 `figstash-cli` 均发布到 crates.io；发布只能由 GitHub Actions 中的 Semifold CI 执行。本地和 Agent 环境只允许使用 `cargo publish --dry-run` 与 `cargo package` 验证发布包。
+- 全部 package 使用 `AGPL-3.0-only`，共享仓库、README、关键词和 crates.io category 元数据；cargo-deny 只对这五个 workspace package 设置 AGPL 例外，第三方依赖的许可证 allowlist 不变。内部依赖同时声明本地 `path` 与 registry `version`，由 Semifold 在 release branch 上随 package 版本同步更新。
+- 首次发布按依赖拓扑执行：先发布 `figstash-core`，再发布依赖它的 library crates，最后发布 `figstash-cli`。在 `figstash-core` 尚未进入 crates.io 前，下游 package 的 Cargo dry-run 预期停在 registry dependency lookup；这不允许绕过 Semifold 执行真实本地发布。
 - store migration 必须事务化，并在 destructive migration 前创建 catalog 备份。
 - 原始 blob 格式尽量 append-only；新 transformer 可从旧 raw blob 重建派生数据。
 - 新 CLI schema 先以 additive 字段演进；删除/改义才升级 `schemaVersion`。
-- alpha 阶段只发布本地 binary，不自动修改 shell/MCP 配置。
+- alpha 阶段发布 crates.io package 和本地 binary，但不自动修改 shell/MCP 配置。
 - 回滚到旧 binary 时，若不认识新 store schema，应只读失败并提示兼容版本，不能尝试降级写入。
 - `snapshot prune --execute` 是唯一常规物理删除入口；删除后返回被删 snapshot/blob 和可恢复性信息。
 
@@ -966,7 +969,6 @@ GetCurrentUser -> Tier3
 
 ## 26. 未决但不阻塞核心实现的事项
 
-- 开源许可证和发布组织；在首次公开发布前确认。
 - crates.io/GitHub 名称实际保留；当前搜索未发现明显 `figstash` crate 冲突，但尚未发布占位。
 - Windows 是否列为 v1 正式支持平台；架构保持可移植，当前首要运行环境为 macOS。
 - 视觉比较的 perceptual metric 和默认阈值；待 P2 真实 fixture 后通过 ADR 确认。

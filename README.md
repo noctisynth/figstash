@@ -134,7 +134,9 @@ The repository uses [Semifold](https://github.com/noctisynth/semifold) with the
 Rust resolver. Package versions are written explicitly in every member
 `Cargo.toml` so Semifold can update each package deterministically.
 `main` is the base branch; Semifold owns the separate `release` branch used by
-its version/publish workflow. The release branch must never be set to `main`.
+its version/publish workflow. All workspace packages carry crates.io-compatible
+metadata and versioned internal path dependencies. The release branch must
+never be set to `main`.
 
 ```bash
 smif commit
@@ -143,6 +145,12 @@ smif config sync --check
 ```
 
 `smif version`, release-branch writes, and publishing run only in GitHub Actions.
+
+## License
+
+Figstash is licensed under the
+[GNU Affero General Public License v3.0 only](https://github.com/noctisynth/figstash/blob/main/LICENSE)
+(`AGPL-3.0-only`).
 
 See [DESIGN.md](./DESIGN.md) for the technical design and
 [TODO.md](./TODO.md) for the prioritized implementation plan.
