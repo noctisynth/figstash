@@ -8,8 +8,7 @@ mod identifier;
 
 pub use auth::{Credential, CredentialSource, KeyringBackend, PatProvider, SystemKeyring};
 pub use gateway::{
-    CurrentUser, CurrentUserReceipt, DownloadReceipt, FigmaGateway, FigmaTransport, FileMetadata,
-    FileMetadataReceipt, RateLimitHeaders, ReqwestTransport, TransportError, TransportErrorKind,
-    TransportResponse,
+    CurrentUser, CurrentUserReceipt, DownloadReceipt, FigmaGateway, FigmaTransport,
+    RateLimitHeaders, ReqwestTransport, TransportError, TransportErrorKind, TransportResponse,
 };
 pub use identifier::{FigmaTarget, normalize_node_id, parse_figma_target};

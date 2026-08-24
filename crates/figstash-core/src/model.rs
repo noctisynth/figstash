@@ -28,8 +28,6 @@ pub enum EndpointClass {
     GetImages,
     /// `GET /v1/files/:key/images`.
     GetImageFills,
-    /// `GET /v1/files/:key/meta`.
-    GetFileMeta,
     /// `GET /v1/me`.
     GetCurrentUser,
 }
@@ -41,7 +39,7 @@ impl EndpointClass {
         match self {
             Self::GetFile | Self::GetFileNodes | Self::GetImages => Tier::Tier1,
             Self::GetImageFills => Tier::Tier2,
-            Self::GetFileMeta | Self::GetCurrentUser => Tier::Tier3,
+            Self::GetCurrentUser => Tier::Tier3,
         }
     }
 }
@@ -307,7 +305,6 @@ mod tests {
         assert_eq!(EndpointClass::GetFileNodes.tier(), Tier::Tier1);
         assert_eq!(EndpointClass::GetImages.tier(), Tier::Tier1);
         assert_eq!(EndpointClass::GetImageFills.tier(), Tier::Tier2);
-        assert_eq!(EndpointClass::GetFileMeta.tier(), Tier::Tier3);
         assert_eq!(EndpointClass::GetCurrentUser.tier(), Tier::Tier3);
     }
 

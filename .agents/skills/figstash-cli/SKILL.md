@@ -29,13 +29,6 @@ If no suitable snapshot exists, stop before networking and tell the user:
 
 Run the proposed pull only after unambiguous user authorization for that exact operation. Authorization is single-use: it does not cover a retry after failure, another file, another request profile/version, or a later refresh. Never use `--force` unless the user explicitly requested and authorized a refresh. Never retry a Tier 1 failure automatically.
 
-When a snapshot exists and the user explicitly requests a refresh, disclose that a
-normal pull first calls Tier 3 `GET /v1/files/:key/meta` and can then call Tier 1
-`GET /v1/files/:key` once only when the version changed. If
-`file_metadata:read` is unavailable, the command fails closed without Tier 1 and
-reports the explicit `--force` command; do not run that command without separate
-authorization.
-
 ## Contract discovery
 
 Run `figstash schema` to list stable commands and `figstash schema <command>` for exact inputs, outputs, errors, network behavior, and examples. Treat this runtime schema and `schemas/cli/v1/` as authoritative when this skill and the binary differ.
@@ -89,7 +82,7 @@ Use `--snapshot <id>` for a historical immutable snapshot. `--geometry paths` se
 
 ## Snapshot and request rules
 
-Two commands can call Figma explicitly: `auth whoami` and `snapshot pull`. `auth whoami` is Tier 3. An authorized, uncached `snapshot pull` performs one Tier 1 `GET /v1/files/:key` and stores the result locally. For an existing snapshot, a normal pull spends one Tier 3 metadata request and spends one Tier 1 request only when the returned version changed. The following is an example only, not permission to pull automatically:
+Two commands can call Figma explicitly: `auth whoami` and `snapshot pull`. `auth whoami` is Tier 3. An authorized, uncached `snapshot pull` performs one Tier 1 `GET /v1/files/:key` and stores the result locally. The following is an example only, not permission to pull automatically:
 
 ```bash
 printf '%s' "$FIGMA_TOKEN" | figstash auth set --stdin
@@ -97,11 +90,11 @@ figstash auth whoami
 figstash snapshot pull FILE_KEY
 ```
 
-The pull endpoints must serialize exactly as `https://api.figma.com/v1/files/FILE_KEY` and `https://api.figma.com/v1/files/FILE_KEY/meta`, without a duplicated slash or empty trailing query. Treat any different endpoint shape as a Figstash defect; do not retry it against Figma. An unexpected 404 is not authorization to spend another Tier 1 request—validate identity with `auth whoami`, inspect the reported endpoint, and stop for diagnosis.
+The pull endpoint must serialize exactly as `https://api.figma.com/v1/files/FILE_KEY`, without a duplicated slash or empty trailing query. Treat any different endpoint shape as a Figstash defect; do not retry it against Figma. An unexpected 404 is not authorization to spend another Tier 1 request—validate identity with `auth whoami`, inspect the reported endpoint, and stop for diagnosis.
 
-Generate the PAT with `current_user:read`, `file_content:read`, and `file_metadata:read`. `auth status` checks only local presence with zero network attempts. `auth whoami` explicitly performs `GET /v1/me`, returns the authenticated user, and normally records one Tier 3 attempt; a connection failure or 5xx may cause the single safe Tier 2/3 retry allowed by policy. It does not consume Tier 1 file-content quota. Use `--offline auth whoami` when remote validation must be prohibited.
+Generate the PAT with `current_user:read` and `file_content:read`. `auth status` checks only local presence with zero network attempts. `auth whoami` explicitly performs `GET /v1/me`, returns the authenticated user, and normally records one Tier 3 attempt; a connection failure or 5xx may cause the single safe Tier 2/3 retry allowed by policy. It does not consume Tier 1 file-content quota. Use `--offline auth whoami` when remote validation must be prohibited.
 
-Never put a token directly in argv, logs, prompts, or committed files. `--force` skips metadata probing and spends one Tier 1 request. A normal pull for an already cached lineage returns `unchanged` with one Tier 3 and zero Tier 1 attempts when the version matches. If metadata access is unavailable, it returns `metadata_unavailable` instead of silently spending Tier 1. This CLI guard is defense in depth; the Agent must still perform the offline preflight and obtain the per-operation authorization described above.
+Never put a token directly in argv, logs, prompts, or committed files. `--force` spends another Tier 1 request. A normal pull for an already cached lineage returns `metadata_unavailable` with zero network attempts: Figma metadata was evaluated but cannot reliably prove that the full file content is unchanged, so automatic probing is intentionally disabled. This CLI guard is defense in depth; the Agent must still perform the offline preflight and obtain the per-operation authorization described above.
 
 All of these are local after a pull: `context`, `outline`, `node get`, `node search`, `tokens get`, `components list`, `snapshot status`, `snapshot list`, `snapshot diff`, `snapshot prune`, `quota status`, and `schema`. A local cache miss is an error; it must not trigger an implicit pull.
 

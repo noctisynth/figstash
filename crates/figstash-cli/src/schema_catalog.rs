@@ -81,7 +81,7 @@ fn effects(
     match name {
         "snapshot.pull" => (
             "online_command",
-            "explicit_metadata_then_conditional_content",
+            "explicit",
             Some("get_file"),
             Some(1),
             true,

@@ -221,13 +221,13 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 
 ## P1 — 核心完整性、稳定性与性能
 
-### P1.1 Metadata 变更探测
+### P1.1 Metadata 变更探测（无法可靠实现，已关闭）
 
-- [x] 实现 `GET /v1/files/:key/meta` Tier 3 client。
-- [x] 已有快照的普通 pull 先比较 version。
-- [x] metadata unchanged 时 Tier 1 为零。
-- [x] metadata scope 缺失时 fail closed，提示 `--force`。
-- [x] 增加 unchanged/changed/missing-scope 请求次数测试。
+- [x] 评估 `GET /v1/files/:key/meta` Tier 3 client 及 `version`、`last_touched_at` 候选信号。
+- [x] 真实 E2E 确认 metadata `version` 会在完整文件内容未变时漂移，且 `last_touched_at` 不能与完整文件 `lastModified` 直接比较。
+- [x] 确认 canonical content hash 只能在 Tier 1 下载后计算，无法用于下载前的配额优化。
+- [x] 关闭自动 metadata 变更探测；已有快照普通 pull 恢复零网络 fail closed，并提示显式 `--force`。
+- [x] 保留首次 pull、普通 pull fail-closed 与 force 请求次数测试。
 
 ### P1.2 Snapshot diff
 

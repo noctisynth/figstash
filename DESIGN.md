@@ -42,7 +42,7 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 | [Figma REST API Authentication](https://developers.figma.com/docs/rest-api/authentication/) | 2026-08-20 | 本地个人工具适合 PAT；文件内容需要 `file_content:read` |
 | [Figma Personal Access Tokens](https://developers.figma.com/docs/rest-api/personal-access-tokens/) | 2026-08-20 | PAT 和 plan access token 使用 `X-Figma-Token` 请求头 |
 | [Figma OAuth Apps](https://developers.figma.com/docs/rest-api/oauth-apps/) | 2026-08-20 | OAuth access token 使用 `Authorization: Bearer` 请求头 |
-| [Figma OpenAPI Specification](https://github.com/figma/rest-api-spec) | 0.42.0，commit `04fbbc719706e986fc79f3050d3e068e118275d9`，2026-08-24 | 官方 OpenAPI 3.1 和类型；metadata 响应的 `file.version` 用于变更判断；官方明确标注 spec 仍为 beta |
+| [Figma OpenAPI Specification](https://github.com/figma/rest-api-spec) | 0.42.0，commit `04fbbc719706e986fc79f3050d3e068e118275d9`，2026-08-24 | 官方 OpenAPI 3.1 和类型；`GET file` 的 `version`/`lastModified` 与 metadata 的 `version`/`last_touched_at` 分属不同响应契约；官方明确标注 spec 仍为 beta |
 | [`figma-mcp-cached`](https://github.com/Pactortester/Figma-Context-MCP-Cached/tree/d2ba563608aab1e3e06d940e1da789110ac0b440) | commit `d2ba563608aab1e3e06d940e1da789110ac0b440`，npm 1.2.0 | 功能对照基线；此前已完成源码审计，不复用其实现 |
 | [官方 MCP Rust SDK](https://github.com/modelcontextprotocol/rust-sdk) | 2026-08-20 | `rmcp` 支持 Rust 服务端与 stdio；仅在 MCP 阶段接入 |
 
@@ -66,6 +66,7 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 - 快照不可变；刷新成功后原子切换 HEAD，失败时继续使用旧快照。
 - Figma schema 采用“关键字段强类型 + 未知字段保留”的宽容解析，不将 beta OpenAPI 生成物作为唯一运行时模型。
 - 本地配额账本只表示 Figstash 观察到的请求，绝不宣称是 Figma 官方剩余额度。
+- 不使用 Tier 3 file metadata 自动决定是否调用 Tier 1：真实 E2E 中，metadata `version` 在完整文件内容未变时漂移，`last_touched_at` 也无法与完整文件 `lastModified` 直接比较。现有公开契约没有提供既能可靠证明内容相同、又不先消耗 Tier 1 的信号；canonical content hash 只能在 Tier 1 下载后确认。已有快照的普通 pull 因此保持零网络并 fail closed，显式 `--force` 是唯一 current refresh 路径。
 
 ## 4. 目标、非目标与完成标准
 
@@ -111,7 +112,7 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 | 指定远端节点 | `GET /v1/files/:key/nodes` | 1 | `file_content:read` | 正常流程禁用；不用于缓存 miss 回退 |
 | 节点图片/SVG 渲染 | `GET /v1/images/:key` | 1 | `file_content:read` | 视觉阶段 |
 | 获取 image fill URL | `GET /v1/files/:key/images` | 2 | `file_content:read` | 视觉阶段 |
-| 文件 metadata/version 探测 | `GET /v1/files/:key/meta` | 3 | `file_metadata:read` | 核心 CLI 优化 |
+| 文件 metadata/version 探测 | `GET /v1/files/:key/meta` | 3 | `file_metadata:read` | 已评估但禁用；不能可靠决定 Tier 1 刷新 |
 | 当前认证用户 | `GET /v1/me` | 3 | `current_user:read` | 核心 CLI |
 
 所有 Figma endpoint URL 必须序列化为规范的单斜杠路径；通过 base URL 追加 path segment 时必须先移除末尾空 segment，禁止产生 `/v1//...`。gateway 测试必须断言完整序列化 URL，并使用仅监听 loopback 的本地 HTTP server 验证 production transport 的 method 和 credential header；测试不得访问真实 Figma API。
@@ -137,20 +138,16 @@ Agent 集成必须把 Tier 1 视为需要逐次授权的稀缺操作：首次处
 1. 解析 file key、branch key、node ID 和请求 profile。
 2. 获取该 file/profile 的本地 HEAD。
 3. 若不存在本地快照，明确调用一次 Tier 1 `GET file`。
-4. 若已有快照且未指定 `--force`，先调用 Tier 3 metadata：
-   - version 未变化且本地 profile 已满足：返回 `unchanged`，Tier 1 为零；
-   - version 变化：调用一次 Tier 1 `GET file`；
-   - metadata scope 不可用：不自动退化为 Tier 1，返回 `metadata_unavailable`，提示调用方显式使用 `--force`；
-5. `--force` 跳过变更判断，明确调用一次 Tier 1。
-6. `--version <figma-version>` 直接拉取指定版本，不做 current metadata 判断。
+4. 若已有快照且未指定 `--force` 或显式 `--version`，保持零网络并返回 `metadata_unavailable`，说明当前无法可靠判断远端内容是否变化，并提示调用方显式使用 `--force`。
+5. `--force` 明确调用一次 Tier 1，不先执行 metadata 探测。
+6. `--version <figma-version>` 直接拉取指定版本。
 
 典型成本：
 
 | 场景 | Tier 3 | Tier 1 |
 | --- | ---: | ---: |
 | 首次 pull | 0 | 1 |
-| 已有快照且远端未变化 | 1 | 0 |
-| 已有快照且远端已变化 | 1 | 1 |
+| 已有快照的普通 pull（fail closed） | 0 | 0 |
 | `--force` | 0 | 1 |
 
 `geometry=paths` 不增加请求次数，但显著增加响应体积。核心 CLI 默认不请求几何；调用方通过 `--geometry paths` 建立包含向量路径的独立请求 profile。已有普通快照不能被静默“升级”为 geometry 快照，因为升级需要新的 Tier 1 调用。
@@ -475,8 +472,8 @@ Agent
   -> URL parser: file key / profile
   -> Store: acquire per-file/profile lock
   -> Store: read HEAD
-  -> Figma gateway: optional Tier 3 metadata
-  -> Figma gateway: explicit Tier 1 GET file when required
+  -> Existing HEAD without --force/version: fail closed with zero network
+  -> Figma gateway: explicit Tier 1 GET file for first/force/version pull
   -> Staging: stream raw response, hash, validate envelope
   -> Indexer: walk document and build node/style/component indexes
   -> Store: commit immutable snapshot and request ledger
@@ -658,7 +655,7 @@ schema_migrations(version, applied_at, checksum)
 
 `figstash auth set --stdin` 从 stdin 读取 PAT 并写入系统 keyring；token 不回显、不写普通配置、不出现在 args、JSON 和日志。`auth status` 只返回 credential kind、token source 和是否存在，不返回 token 内容，也不声称已验证远端 scope。`auth whoami` 是显式在线命令，调用 Tier 3 `GET /v1/me` 验证 credential 并返回规范化的 `id`、`handle`、`email` 和 `avatarUrl`；成功结果同时返回 credential kind/source 和 `remoteValidated=true`。它不消耗 Tier 1 文件内容额度，但仍受 Tier 3 限流和既有安全重试策略约束。`--offline auth whoami` 在读取 credential 或发送请求前返回 `offline_mode`。`auth clear` 删除 keyring 项。
 
-当前完整 CLI 的 PAT 最小 scope 是 `file_content:read`、`file_metadata:read` 与 `current_user:read`：前两者分别用于完整快照拉取和已有快照的 metadata 变更探测，后者用于 `auth whoami`。Figstash 不从 token 字符串猜测或声称已授予 scope；远端 401/403 按稳定认证错误返回。
+当前完整 CLI 的 PAT 最小 scope 是 `file_content:read` 与 `current_user:read`：前者用于快照拉取，后者用于 `auth whoami`。已禁用的 metadata 自动探测不要求 `file_metadata:read`。Figstash 不从 token 字符串猜测或声称已授予 scope；远端 401/403 按稳定认证错误返回。
 
 网络层使用显式 `CredentialKind`，不能从 token 字符串猜测类型：
 
@@ -725,7 +722,7 @@ GetCurrentUser -> Tier3
 | --- | --- |
 | 无本地快照 | query 返回 `snapshot_missing`，零网络 |
 | node 不存在 | 返回 `node_not_found` 和相近 node ID/name 候选，零网络 |
-| metadata scope 缺失 | pull 返回 `metadata_unavailable`；不隐式调用 Tier 1 |
+| 已有快照的普通 pull | 返回 `metadata_unavailable`；零网络并提示显式 `--force` |
 | Tier 1 429 | 返回 `rate_limited`、响应头和本地旧快照信息；不重试 |
 | Tier 1 5xx/timeout | 当前 refresh 失败；旧 HEAD 保持；不重试 |
 | Figma 新增未知字段/type | 原始数据保存；已知字段继续索引；warning 标记解析覆盖率 |
@@ -825,7 +822,7 @@ GetCurrentUser -> Tier3
 ### 20.2 集成测试
 
 - mock Figma API：200、403、404、429、5xx、timeout、截断 JSON；
-- 首次 pull、metadata unchanged、changed、force 的请求次数断言；
+- 首次 pull、已有快照普通 pull fail-closed、force 的请求次数断言；
 - 对每个 local query 安装“网络即失败”的 transport，证明零请求；
 - 并发两个 pull 最多产生一次 Tier 1；
 - staging 中途崩溃后旧 HEAD 仍可读；
@@ -921,7 +918,7 @@ GetCurrentUser -> Tier3
 
 ### Phase 1.5：完整性与稳定性
 
-- metadata probe、diff、迁移、crash recovery；
+- diff、迁移、crash recovery；metadata 自动变更探测因无可靠低成本信号而关闭；
 - 大文件性能、FTS、并发锁；
 - keyring、Windows/Linux 验证；
 - feature parity 缺口收敛。
@@ -962,7 +959,7 @@ GetCurrentUser -> Tier3
 | OpenAPI beta/schema drift | 解析失败或字段丢失 | 宽容解析、raw blob、未知字段保留、fixture 更新 |
 | 大文件导致磁盘/内存压力 | pull/index 失败 | 流式落盘、zstd、资源上限、staging 原子提交 |
 | Agent 误触 `--force` | 浪费 Tier 1 | 命令结果和 help 明确成本；账本；未来可配置月度本地 guard |
-| metadata scope 不可用 | 无法低成本探测 | fail closed，要求显式 `--force`；不偷偷调用 Tier 1 |
+| metadata 信号与完整文件内容不一致 | 误触 Tier 1 或漏掉真实变化 | 禁用自动探测；已有快照普通 pull 零网络 fail closed，要求显式 `--force` |
 | 本地账本与官方实际用量不同 | 错误决策 | 始终标注 observed-only，不显示官方剩余值 |
 | compact transform 丢语义 | Agent 误解设计 | raw view、golden fixture、原始 payload 永久保留 |
 | SVG 结构与 node 非一一对应 | 切片不完整 | fidelity 状态、geometry/remote 双来源、明确 unsupported |

@@ -33,18 +33,17 @@ target/release/figstash auth whoami
 target/release/figstash snapshot pull 'https://www.figma.com/design/FILE_KEY/Name'
 ```
 
-Generate the PAT with the minimal scopes `current_user:read`,
-`file_content:read`, and `file_metadata:read`. `auth whoami` explicitly performs
-`GET /v1/me` to verify the credential and report its Figma user. It is a Tier 3
-request, not a Tier 1 file-content request; `auth status` remains the zero-network
-presence check.
+Generate the PAT with the minimal scopes `current_user:read` and
+`file_content:read`. `auth whoami` explicitly performs `GET /v1/me` to verify
+the credential and report its Figma user. It is a Tier 3 request, not a Tier 1
+file-content request; `auth status` remains the zero-network presence check.
 
-The first pull performs exactly one Tier 1 `GET /v1/files/:key`. For an existing
-snapshot, an ordinary pull first performs Tier 3 `GET /v1/files/:key/meta`; an
-unchanged version returns the cached snapshot with zero Tier 1 requests, while a
-changed version performs one Tier 1 request. `--force` skips metadata and performs
-exactly one Tier 1 request. Tier 1 is never retried automatically, and missing
-metadata scope fails closed with `metadata_unavailable`.
+The first pull performs exactly one Tier 1 `GET /v1/files/:key`. `--force` also
+performs exactly one Tier 1 request and is never retried automatically. An
+ordinary pull of an already cached lineage returns `metadata_unavailable` with
+zero network attempts; Figma metadata was evaluated but cannot reliably prove
+that the full file content is unchanged. Use `--force` only for an explicitly
+authorized refresh.
 
 All of these commands are pure local reads after a snapshot exists:
 
@@ -112,8 +111,8 @@ log_level = "warn"
 `FIGMA_TOKEN` is always interpreted explicitly as a PAT and takes precedence
 over the system keyring. PAT contents are never written to config, SQLite, logs,
 or JSON output. The data directory is created with user-only permissions on Unix.
-Refreshing an existing snapshot first probes its remote version, so PATs using
-that flow also need `file_metadata:read`.
+Automatic metadata probing is disabled, so the CLI does not require
+`file_metadata:read`.
 
 ## Development
 
