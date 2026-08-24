@@ -1,0 +1,19 @@
+# Changelog
+
+<!-- semifold:release version=0.1.0-alpha.0 -->
+## v0.1.0-alpha.0
+
+### Chores
+
+- [`0f90101`](https://github.com/noctisynth/figstash/commit/0f901010af82e78cc072803d266cb78c2f51a7f8): Publish every Figstash package with AGPL-3.0-only licensing, complete crates.io metadata, and versioned internal path dependencies.
+
+### New Features
+
+- [`dccc2d9`](https://github.com/noctisynth/figstash/commit/dccc2d9802577f9c564d97f44a913ee64071d56b): Add high-level context and outline commands plus runtime schema discovery so agents can discover nodes and consume self-contained local design context without implicit Figma requests.
+- [`ecfa2fa`](https://github.com/noctisynth/figstash/commit/ecfa2facf2567879488aab175673298300972ca1): Return referenced styles, derived design values, and component metadata with compact node queries so an Agent can consume a self-contained offline design-to-code context.
+- [`64e9232`](https://github.com/noctisynth/figstash/commit/64e923296e4a1686bfb8f1cd149deea9bea0bea0): Implement the complete P0 local-first Agent CLI, including quota-aware Figma pulls, durable snapshots, offline queries, stable JSON contracts, and security/quality gates.
+
+### Dependencies
+
+- Update figstash-core to 0.1.0-alpha.0.
+<!-- semifold:release:end -->
