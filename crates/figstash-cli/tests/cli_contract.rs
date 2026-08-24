@@ -205,9 +205,17 @@ fn schema_command_supports_catalog_and_detailed_contract_discovery() {
     let detail = run_cli(temporary.path(), &["schema", "snapshot.pull"]);
     assert!(detail.status.success());
     let detail = parse_single_stdout(&detail);
-    assert_eq!(detail["data"]["network"], "explicit");
+    assert_eq!(
+        detail["data"]["network"],
+        "explicit_metadata_then_conditional_content"
+    );
     assert_eq!(detail["data"]["endpointClass"], "get_file");
     assert_eq!(detail["data"]["tier"], 1);
+    assert!(
+        detail["data"]["errors"]
+            .as_array()
+            .is_some_and(|errors| errors.iter().any(|error| error == "metadata_unavailable"))
+    );
     assert_eq!(detail["meta"]["network"]["attempts"], 0);
 
     let whoami = run_cli(temporary.path(), &["schema", "auth.whoami"]);
@@ -409,14 +417,7 @@ fn offline_whoami_fails_before_credential_or_network_access() {
 }
 
 #[test]
-fn pull_policy_fails_before_auth_or_network_when_refresh_is_not_explicit() {
-    let (temporary, _store, _summary) = prepared_store();
-    let existing = run_cli(temporary.path(), &["snapshot", "pull", FILE_KEY]);
-    assert_eq!(existing.status.code(), Some(6));
-    let existing_json = parse_single_stdout(&existing);
-    assert_eq!(existing_json["error"]["code"], "metadata_unavailable");
-    assert_eq!(existing_json["meta"]["network"]["attempts"], 0);
-
+fn offline_pull_prevents_credential_and_network_access() {
     let empty =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
     let offline = Command::new(env!("CARGO_BIN_EXE_figstash"))

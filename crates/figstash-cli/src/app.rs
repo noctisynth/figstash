@@ -7,8 +7,8 @@ use crate::args::{
 use crate::config::AppConfig;
 use crate::output::{CommandOutput, emit_failure, emit_success};
 use figstash_core::{
-    AppError, AppResult, AttemptRecorder, ErrorCode, GeometryMode, RequestProfile, ResponseSource,
-    SnapshotRepository, SnapshotSelector,
+    AppError, AppResult, AttemptRecorder, ErrorCode, GeometryMode, NetworkUsage, RequestProfile,
+    ResponseSource, SnapshotRepository, SnapshotSelector, SnapshotSummary,
 };
 use figstash_figma::{
     Credential, FigmaGateway, FigmaTarget, FigmaTransport, PatProvider, ReqwestTransport,
@@ -344,28 +344,20 @@ async fn snapshot_pull(
     }
     let store = Store::open(&config.data_dir)?;
     let _lock = store.try_lock(file_key, profile.key())?;
-    let existing = store.resolve_snapshot(SnapshotSelector {
+    let existing = match store.resolve_snapshot(SnapshotSelector {
         file_key,
         request_profile: profile.key(),
         snapshot_id: None,
-    });
-    if existing.is_ok() && !args.force && args.version.is_none() {
-        return Err(AppError::new(
-            ErrorCode::MetadataUnavailable,
-            "A local snapshot already exists; P0 will not spend another Tier 1 request implicitly.",
-        )
-        .with_details(json!({
-            "fileKey": file_key,
-            "requestProfile": profile.key(),
-            "suggestedCommand": format!("figstash snapshot pull {file_key} --force"),
-            "tier1Attempted": 0
-        })));
-    }
-    if let Err(error) = &existing {
-        if !matches!(error.code(), ErrorCode::SnapshotMissing) {
-            return Err(error.clone());
+    }) {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            if error.code() == ErrorCode::SnapshotMissing {
+                None
+            } else {
+                return Err(error);
+            }
         }
-    }
+    };
     let credential = PatProvider::new(SystemKeyring).resolve()?;
     let transport = ReqwestTransport::new(
         config.connect_timeout,
@@ -373,13 +365,95 @@ async fn snapshot_pull(
         config.inherit_proxy,
     )?;
     let gateway = FigmaGateway::new(transport, store.clone(), config.maximum_download_bytes);
-    download_and_commit(
+    refresh_or_download(
         &store,
         &gateway,
         &target,
         profile,
+        existing.as_ref(),
+        args.force,
         args.version.as_deref(),
         &credential,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn refresh_or_download<T, L>(
+    store: &Store,
+    gateway: &FigmaGateway<T, L>,
+    target: &FigmaTarget,
+    profile: RequestProfile,
+    existing: Option<&SnapshotSummary>,
+    force: bool,
+    version: Option<&str>,
+    credential: &Credential,
+) -> AppResult<CommandOutput>
+where
+    T: FigmaTransport,
+    L: AttemptRecorder,
+{
+    if let Some(existing) = existing.filter(|_| !force && version.is_none()) {
+        let metadata_stage = store.create_staging_file()?;
+        let metadata_result = gateway
+            .get_file_metadata(
+                target.effective_file_key(),
+                profile,
+                credential,
+                &metadata_stage,
+            )
+            .await;
+        cleanup_stage(&metadata_stage);
+        let metadata = metadata_result.map_err(|error| {
+            if error.code() == ErrorCode::MetadataUnavailable {
+                error
+                    .with_detail(
+                        "suggestedCommand",
+                        json!(format!(
+                            "figstash snapshot pull {} --force",
+                            target.effective_file_key()
+                        )),
+                    )
+                    .with_detail("tier1Attempted", json!(0))
+            } else {
+                error
+            }
+        })?;
+        if metadata.metadata.version == existing.figma_version {
+            return Ok(CommandOutput {
+                data: json!({
+                    "status": "unchanged",
+                    "snapshot": existing,
+                    "target": target,
+                    "responseHash": existing.raw_blob_hash,
+                    "responseSize": existing.raw_size
+                }),
+                source: ResponseSource::Mixed,
+                snapshot_id: Some(existing.id.clone()),
+                figma_version: Some(existing.figma_version.clone()),
+                network: metadata.network,
+                warnings: Vec::new(),
+            });
+        }
+        return download_and_commit(
+            store,
+            gateway,
+            target,
+            profile,
+            None,
+            credential,
+            metadata.network,
+        )
+        .await;
+    }
+    download_and_commit(
+        store,
+        gateway,
+        target,
+        profile,
+        version,
+        credential,
+        NetworkUsage::default(),
     )
     .await
 }
@@ -391,13 +465,16 @@ async fn download_and_commit<T, L>(
     profile: RequestProfile,
     version: Option<&str>,
     credential: &Credential,
+    prior_network: NetworkUsage,
 ) -> AppResult<CommandOutput>
 where
     T: FigmaTransport,
     L: AttemptRecorder,
 {
     let file_key = target.effective_file_key();
-    let stage = store.create_staging_file()?;
+    let stage = store
+        .create_staging_file()
+        .map_err(|error| error.with_detail("network", json!(prior_network)))?;
     let receipt = match gateway
         .get_file(file_key, version, profile, credential, &stage)
         .await
@@ -405,16 +482,17 @@ where
         Ok(receipt) => receipt,
         Err(error) => {
             cleanup_stage(&stage);
-            return Err(error);
+            return Err(with_prior_network(error, prior_network));
         }
     };
+    let network = prior_network.combined(receipt.network);
     let bytes = fs::read(&stage).map_err(|error| {
         AppError::new(
             ErrorCode::StoreFailed,
             "Failed to read the completed staging response.",
         )
         .with_detail("reason", json!(error.to_string()))
-        .with_detail("network", json!(receipt.network))
+        .with_detail("network", json!(network))
     })?;
     let actual_hash = blake3::hash(&bytes).to_hex().to_string();
     if actual_hash != receipt.hash || u64::try_from(bytes.len()).ok() != Some(receipt.size) {
@@ -423,17 +501,17 @@ where
             ErrorCode::StoreCorrupt,
             "The staged response changed after download.",
         )
-        .with_detail("network", json!(receipt.network)));
+        .with_detail("network", json!(network)));
     }
     let indexed = parse_file(&bytes).map_err(|error| {
         error
-            .with_detail("network", json!(receipt.network))
+            .with_detail("network", json!(network))
             .with_detail("responseHash", json!(receipt.hash))
     })?;
     let warnings = indexed.warnings.clone();
     let summary = store
         .commit_snapshot(file_key, profile.key(), &stage, &indexed)
-        .map_err(|error| error.with_detail("network", json!(receipt.network)))?;
+        .map_err(|error| error.with_detail("network", json!(network)))?;
     Ok(CommandOutput {
         data: json!({
             "status": "pulled",
@@ -445,7 +523,7 @@ where
         source: ResponseSource::Figma,
         snapshot_id: Some(summary.id.clone()),
         figma_version: Some(summary.figma_version.clone()),
-        network: receipt.network,
+        network,
         warnings,
     })
 }
@@ -565,6 +643,16 @@ fn cleanup_stage(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
+fn with_prior_network(error: AppError, prior_network: NetworkUsage) -> AppError {
+    let current = error
+        .details()
+        .get("network")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    error.with_detail("network", json!(prior_network.combined(current)))
+}
+
 fn initialize_logging(level: &str) {
     if level == "off" {
         return;
@@ -588,9 +676,12 @@ fn chrono_like_age(timestamp: i64) -> Option<std::time::Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::{download_and_commit, whoami_with_gateway};
+    use super::{download_and_commit, refresh_or_download, whoami_with_gateway};
     use async_trait::async_trait;
-    use figstash_core::{CredentialKind, RequestProfile, SnapshotRepository, SnapshotSelector};
+    use figstash_core::{
+        CredentialKind, EndpointClass, ErrorCode, NetworkUsage, RequestProfile, ResponseSource,
+        SnapshotRepository, SnapshotSelector, SnapshotSummary,
+    };
     use figstash_figma::{
         Credential, CredentialSource, FigmaGateway, FigmaTarget, FigmaTransport, RateLimitHeaders,
         TransportError, TransportResponse,
@@ -598,11 +689,18 @@ mod tests {
     use figstash_query::{NodeGetOptions, QueryService, View};
     use figstash_store::Store;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
     use url::Url;
 
     struct FixtureTransport;
 
     struct CurrentUserTransport;
+
+    struct RefreshTransport {
+        metadata_status: u16,
+        metadata_version: Option<String>,
+        endpoints: Arc<Mutex<Vec<EndpointClass>>>,
+    }
 
     #[async_trait]
     impl FigmaTransport for FixtureTransport {
@@ -656,6 +754,290 @@ mod tests {
                 hash: blake3::hash(bytes).to_hex().to_string(),
             })
         }
+    }
+
+    #[async_trait]
+    impl FigmaTransport for RefreshTransport {
+        async fn download(
+            &self,
+            url: &Url,
+            endpoint: EndpointClass,
+            credential: &Credential,
+            destination: &Path,
+            _maximum_bytes: u64,
+        ) -> Result<TransportResponse, TransportError> {
+            assert_eq!(credential.kind(), CredentialKind::Pat);
+            self.endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}"))
+                .push(endpoint);
+            let (status, bytes) = match endpoint {
+                EndpointClass::GetFileMeta => {
+                    assert_eq!(
+                        url.as_str(),
+                        "https://api.figma.com/v1/files/SyntheticFileKey123/meta"
+                    );
+                    let body = self.metadata_version.as_ref().map_or_else(
+                        || serde_json::json!({"file": {}}),
+                        |version| serde_json::json!({"file": {"version": version}}),
+                    );
+                    (
+                        self.metadata_status,
+                        serde_json::to_vec(&body).unwrap_or_else(|error| {
+                            panic!("metadata fixture serialization failed: {error}")
+                        }),
+                    )
+                }
+                EndpointClass::GetFile => {
+                    assert_eq!(
+                        url.as_str(),
+                        "https://api.figma.com/v1/files/SyntheticFileKey123"
+                    );
+                    let mut body: serde_json::Value = serde_json::from_slice(include_bytes!(
+                        "../../../fixtures/figma/feature-parity.json"
+                    ))
+                    .unwrap_or_else(|error| panic!("file fixture parse failed: {error}"));
+                    if let Some(version) = &self.metadata_version {
+                        body["version"] = serde_json::Value::String(version.clone());
+                    }
+                    (
+                        200,
+                        serde_json::to_vec(&body).unwrap_or_else(|error| {
+                            panic!("file fixture serialization failed: {error}")
+                        }),
+                    )
+                }
+                other => panic!("unexpected refresh endpoint: {other:?}"),
+            };
+            tokio::fs::write(destination, &bytes)
+                .await
+                .map_err(|error| {
+                    TransportError::new(figstash_figma::TransportErrorKind::Io, error.to_string())
+                })?;
+            Ok(TransportResponse {
+                status,
+                rate_limit: RateLimitHeaders::default(),
+                size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                hash: blake3::hash(&bytes).to_hex().to_string(),
+            })
+        }
+    }
+
+    async fn prepared_refresh_state() -> (tempfile::TempDir, Store, FigmaTarget, SnapshotSummary) {
+        let temporary = tempfile::tempdir()
+            .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+        let store = Store::open(temporary.path())
+            .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
+        let target = FigmaTarget {
+            file_key: "SyntheticFileKey123".to_owned(),
+            branch_key: None,
+            node_id: None,
+        };
+        let credential = Credential::personal_access_token("fixture", CredentialSource::Keyring)
+            .unwrap_or_else(|error| panic!("credential failed: {error}"));
+        let gateway = FigmaGateway::new(FixtureTransport, store.clone(), 10 * 1024 * 1024);
+        let output = download_and_commit(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            None,
+            &credential,
+            NetworkUsage::default(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("initial mock pull failed: {error}"));
+        let snapshot = store
+            .resolve_snapshot(SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: RequestProfile::default().key(),
+                snapshot_id: output.snapshot_id.as_deref(),
+            })
+            .unwrap_or_else(|error| panic!("prepared snapshot lookup failed: {error}"));
+        (temporary, store, target, snapshot)
+    }
+
+    fn refresh_transport(
+        metadata_status: u16,
+        metadata_version: Option<&str>,
+    ) -> (RefreshTransport, Arc<Mutex<Vec<EndpointClass>>>) {
+        let endpoints = Arc::new(Mutex::new(Vec::new()));
+        (
+            RefreshTransport {
+                metadata_status,
+                metadata_version: metadata_version.map(ToOwned::to_owned),
+                endpoints: Arc::clone(&endpoints),
+            },
+            endpoints,
+        )
+    }
+
+    fn fixture_credential() -> Credential {
+        Credential::personal_access_token("fixture", CredentialSource::Keyring)
+            .unwrap_or_else(|error| panic!("credential failed: {error}"))
+    }
+
+    #[tokio::test]
+    async fn unchanged_refresh_spends_one_tier_three_and_zero_tier_one() {
+        let (_temporary, store, target, existing) = prepared_refresh_state().await;
+        let (transport, endpoints) = refresh_transport(200, Some("1001"));
+        let gateway = FigmaGateway::new(transport, store.clone(), 10 * 1024 * 1024);
+        let output = refresh_or_download(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            Some(&existing),
+            false,
+            None,
+            &fixture_credential(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("unchanged refresh failed: {error}"));
+
+        assert_eq!(output.data["status"], "unchanged");
+        assert_eq!(output.source, ResponseSource::Mixed);
+        assert_eq!(output.snapshot_id.as_deref(), Some(existing.id.as_str()));
+        assert_eq!(output.network.attempts, 1);
+        assert_eq!(output.network.tier1, 0);
+        assert_eq!(output.network.tier3, 1);
+        assert_eq!(
+            *endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}")),
+            vec![EndpointClass::GetFileMeta]
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_refresh_spends_tier_three_then_one_tier_one() {
+        let (_temporary, store, target, existing) = prepared_refresh_state().await;
+        let (transport, endpoints) = refresh_transport(200, Some("1002"));
+        let gateway = FigmaGateway::new(transport, store.clone(), 10 * 1024 * 1024);
+        let output = refresh_or_download(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            Some(&existing),
+            false,
+            None,
+            &fixture_credential(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("changed refresh failed: {error}"));
+
+        assert_eq!(output.data["status"], "pulled");
+        assert_eq!(output.figma_version.as_deref(), Some("1002"));
+        assert_eq!(output.network.attempts, 2);
+        assert_eq!(output.network.tier1, 1);
+        assert_eq!(output.network.tier3, 1);
+        assert_eq!(
+            *endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}")),
+            vec![EndpointClass::GetFileMeta, EndpointClass::GetFile]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_metadata_scope_fails_closed_without_tier_one() {
+        let (_temporary, store, target, existing) = prepared_refresh_state().await;
+        let (transport, endpoints) = refresh_transport(403, None);
+        let gateway = FigmaGateway::new(transport, store.clone(), 10 * 1024 * 1024);
+        let result = refresh_or_download(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            Some(&existing),
+            false,
+            None,
+            &fixture_credential(),
+        )
+        .await;
+        let error = match result {
+            Ok(_) => panic!("missing metadata scope must fail closed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), ErrorCode::MetadataUnavailable);
+        assert_eq!(error.details()["tier1Attempted"], 0);
+        assert_eq!(
+            error.details()["suggestedCommand"],
+            "figstash snapshot pull SyntheticFileKey123 --force"
+        );
+        assert_eq!(error.details()["network"]["attempts"], 1);
+        assert_eq!(error.details()["network"]["tier1"], 0);
+        assert_eq!(error.details()["network"]["tier3"], 1);
+        assert_eq!(
+            *endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}")),
+            vec![EndpointClass::GetFileMeta]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_metadata_version_fails_closed_without_tier_one() {
+        let (_temporary, store, target, existing) = prepared_refresh_state().await;
+        let (transport, endpoints) = refresh_transport(200, None);
+        let gateway = FigmaGateway::new(transport, store.clone(), 10 * 1024 * 1024);
+        let result = refresh_or_download(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            Some(&existing),
+            false,
+            None,
+            &fixture_credential(),
+        )
+        .await;
+        let error = match result {
+            Ok(_) => panic!("missing metadata version must fail closed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), ErrorCode::InvalidFigmaResponse);
+        assert_eq!(error.details()["network"]["attempts"], 1);
+        assert_eq!(error.details()["network"]["tier1"], 0);
+        assert_eq!(error.details()["network"]["tier3"], 1);
+        assert_eq!(
+            *endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}")),
+            vec![EndpointClass::GetFileMeta]
+        );
+    }
+
+    #[tokio::test]
+    async fn force_refresh_skips_metadata_and_spends_one_tier_one() {
+        let (_temporary, store, target, existing) = prepared_refresh_state().await;
+        let (transport, endpoints) = refresh_transport(200, Some("1002"));
+        let gateway = FigmaGateway::new(transport, store.clone(), 10 * 1024 * 1024);
+        let output = refresh_or_download(
+            &store,
+            &gateway,
+            &target,
+            RequestProfile::default(),
+            Some(&existing),
+            true,
+            None,
+            &fixture_credential(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("force refresh failed: {error}"));
+
+        assert_eq!(output.network.attempts, 1);
+        assert_eq!(output.network.tier1, 1);
+        assert_eq!(output.network.tier3, 0);
+        assert_eq!(
+            *endpoints
+                .lock()
+                .unwrap_or_else(|error| panic!("endpoint mutex poisoned: {error}")),
+            vec![EndpointClass::GetFile]
+        );
     }
 
     #[tokio::test]
@@ -722,6 +1104,7 @@ mod tests {
             RequestProfile::default(),
             None,
             &credential,
+            NetworkUsage::default(),
         )
         .await
         .unwrap_or_else(|error| panic!("mock pull failed: {error}"));

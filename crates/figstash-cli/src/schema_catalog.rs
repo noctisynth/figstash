@@ -81,7 +81,7 @@ fn effects(
     match name {
         "snapshot.pull" => (
             "online_command",
-            "explicit",
+            "explicit_metadata_then_conditional_content",
             Some("get_file"),
             Some(1),
             true,
@@ -216,7 +216,19 @@ fn errors(name: &str) -> Vec<&'static str> {
             "store_corrupt",
             "store_failed",
         ],
-        "snapshot.pull" | "auth.whoami" => vec![
+        "snapshot.pull" => vec![
+            "offline_mode",
+            "auth_missing",
+            "auth_failed",
+            "scope_missing",
+            "metadata_unavailable",
+            "rate_limited",
+            "network_failed",
+            "figma_error",
+            "invalid_figma_response",
+            "store_failed",
+        ],
+        "auth.whoami" => vec![
             "offline_mode",
             "auth_missing",
             "auth_failed",

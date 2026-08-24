@@ -223,11 +223,11 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 
 ### P1.1 Metadata 变更探测
 
-- [ ] 实现 `GET /v1/files/:key/meta` Tier 3 client。
-- [ ] 已有快照的普通 pull 先比较 version。
-- [ ] metadata unchanged 时 Tier 1 为零。
-- [ ] metadata scope 缺失时 fail closed，提示 `--force`。
-- [ ] 增加 unchanged/changed/missing-scope 请求次数测试。
+- [x] 实现 `GET /v1/files/:key/meta` Tier 3 client。
+- [x] 已有快照的普通 pull 先比较 version。
+- [x] metadata unchanged 时 Tier 1 为零。
+- [x] metadata scope 缺失时 fail closed，提示 `--force`。
+- [x] 增加 unchanged/changed/missing-scope 请求次数测试。
 
 ### P1.2 Snapshot diff
 

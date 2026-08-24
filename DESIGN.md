@@ -42,7 +42,7 @@ Figstash 将稀缺的远端读取转换为显式的快照刷新，把高频查�
 | [Figma REST API Authentication](https://developers.figma.com/docs/rest-api/authentication/) | 2026-08-20 | 本地个人工具适合 PAT；文件内容需要 `file_content:read` |
 | [Figma Personal Access Tokens](https://developers.figma.com/docs/rest-api/personal-access-tokens/) | 2026-08-20 | PAT 和 plan access token 使用 `X-Figma-Token` 请求头 |
 | [Figma OAuth Apps](https://developers.figma.com/docs/rest-api/oauth-apps/) | 2026-08-20 | OAuth access token 使用 `Authorization: Bearer` 请求头 |
-| [Figma OpenAPI Specification](https://github.com/figma/rest-api-spec) | 2026-08-20 | 官方 OpenAPI 3.1 和类型；官方明确标注 spec 仍为 beta |
+| [Figma OpenAPI Specification](https://github.com/figma/rest-api-spec) | 0.42.0，commit `04fbbc719706e986fc79f3050d3e068e118275d9`，2026-08-24 | 官方 OpenAPI 3.1 和类型；metadata 响应的 `file.version` 用于变更判断；官方明确标注 spec 仍为 beta |
 | [`figma-mcp-cached`](https://github.com/Pactortester/Figma-Context-MCP-Cached/tree/d2ba563608aab1e3e06d940e1da789110ac0b440) | commit `d2ba563608aab1e3e06d940e1da789110ac0b440`，npm 1.2.0 | 功能对照基线；此前已完成源码审计，不复用其实现 |
 | [官方 MCP Rust SDK](https://github.com/modelcontextprotocol/rust-sdk) | 2026-08-20 | `rmcp` 支持 Rust 服务端与 stdio；仅在 MCP 阶段接入 |
 
@@ -658,7 +658,7 @@ schema_migrations(version, applied_at, checksum)
 
 `figstash auth set --stdin` 从 stdin 读取 PAT 并写入系统 keyring；token 不回显、不写普通配置、不出现在 args、JSON 和日志。`auth status` 只返回 credential kind、token source 和是否存在，不返回 token 内容，也不声称已验证远端 scope。`auth whoami` 是显式在线命令，调用 Tier 3 `GET /v1/me` 验证 credential 并返回规范化的 `id`、`handle`、`email` 和 `avatarUrl`；成功结果同时返回 credential kind/source 和 `remoteValidated=true`。它不消耗 Tier 1 文件内容额度，但仍受 Tier 3 限流和既有安全重试策略约束。`--offline auth whoami` 在读取 credential 或发送请求前返回 `offline_mode`。`auth clear` 删除 keyring 项。
 
-当前完整 CLI 的 PAT 最小 scope 是 `file_content:read` 与 `current_user:read`：前者用于快照拉取，后者用于 `auth whoami`。P1 metadata 探测落地后还需要 `file_metadata:read`。Figstash 不从 token 字符串猜测或声称已授予 scope；远端 401/403 按稳定认证错误返回。
+当前完整 CLI 的 PAT 最小 scope 是 `file_content:read`、`file_metadata:read` 与 `current_user:read`：前两者分别用于完整快照拉取和已有快照的 metadata 变更探测，后者用于 `auth whoami`。Figstash 不从 token 字符串猜测或声称已授予 scope；远端 401/403 按稳定认证错误返回。
 
 网络层使用显式 `CredentialKind`，不能从 token 字符串猜测类型：
 

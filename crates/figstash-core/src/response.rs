@@ -42,6 +42,17 @@ impl NetworkUsage {
             Tier::Tier3 => self.tier3 += 1,
         }
     }
+
+    /// Combines attempts observed across consecutive classified requests.
+    #[must_use]
+    pub const fn combined(self, other: Self) -> Self {
+        Self {
+            attempts: self.attempts.saturating_add(other.attempts),
+            tier1: self.tier1.saturating_add(other.tier1),
+            tier2: self.tier2.saturating_add(other.tier2),
+            tier3: self.tier3.saturating_add(other.tier3),
+        }
+    }
 }
 
 /// A non-fatal condition attached to a successful response.
@@ -210,7 +221,7 @@ impl<T> ResponseEnvelope<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AppError, ErrorCode};
+    use crate::{AppError, ErrorCode, NetworkUsage};
 
     use super::{Meta, ResponseEnvelope, ResponseSource};
 
@@ -233,6 +244,31 @@ mod tests {
         .unwrap_or_else(|error| panic!("failure envelope must serialize: {error}"));
         assert!(failure.get("data").is_none());
         assert!(failure.get("error").is_some());
+    }
+
+    #[test]
+    fn network_usage_combines_consecutive_endpoint_attempts() {
+        let metadata = NetworkUsage {
+            attempts: 1,
+            tier1: 0,
+            tier2: 0,
+            tier3: 1,
+        };
+        let content = NetworkUsage {
+            attempts: 1,
+            tier1: 1,
+            tier2: 0,
+            tier3: 0,
+        };
+        assert_eq!(
+            metadata.combined(content),
+            NetworkUsage {
+                attempts: 2,
+                tier1: 1,
+                tier2: 0,
+                tier3: 1,
+            }
+        );
     }
 
     use serde_json::Value;

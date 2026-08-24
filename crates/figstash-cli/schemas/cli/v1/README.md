@@ -23,4 +23,5 @@ returns its input schema, successful data schema, documented errors, network
 classification, local-state effect, and examples without accessing Figma.
 
 The minimal PAT scopes for the implemented command set are `file_content:read`
-for snapshot pulls and `current_user:read` for `auth whoami`.
+for full snapshot pulls, `file_metadata:read` for existing-snapshot change
+probes, and `current_user:read` for `auth whoami`.

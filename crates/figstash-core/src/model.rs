@@ -28,7 +28,7 @@ pub enum EndpointClass {
     GetImages,
     /// `GET /v1/files/:key/images`.
     GetImageFills,
-    /// Reserved metadata endpoint class used by a later milestone.
+    /// `GET /v1/files/:key/meta`.
     GetFileMeta,
     /// `GET /v1/me`.
     GetCurrentUser,

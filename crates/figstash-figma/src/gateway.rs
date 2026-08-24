@@ -235,6 +235,34 @@ pub struct DownloadReceipt {
     pub network: NetworkUsage,
 }
 
+/// Minimal file metadata required to decide whether a cached snapshot changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    /// Current Figma file version.
+    pub version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileMetadataResponse {
+    file: FileMetadataPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileMetadataPayload {
+    version: Option<String>,
+}
+
+/// File metadata response plus observed network usage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadataReceipt {
+    /// Metadata used by the refresh decision.
+    pub metadata: FileMetadata,
+    /// Actual classified request attempts.
+    pub network: NetworkUsage,
+}
+
 /// Normalized identity returned by `GET /v1/me`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,6 +364,87 @@ where
             destination,
         )
         .await
+    }
+
+    /// Fetches the current file version without downloading full Tier 1 content.
+    ///
+    /// # Errors
+    ///
+    /// Returns classified auth, scope, policy, network, Figma, ledger, staging, or schema errors.
+    pub async fn get_file_metadata(
+        &self,
+        file_key: &str,
+        request_profile: RequestProfile,
+        credential: &Credential,
+        destination: &Path,
+    ) -> AppResult<FileMetadataReceipt> {
+        let mut url = Url::parse(API_ROOT).map_err(|error| {
+            AppError::new(
+                ErrorCode::Internal,
+                "The built-in Figma API URL is invalid.",
+            )
+            .with_detail("reason", json!(error.to_string()))
+        })?;
+        url.path_segments_mut()
+            .map_err(|()| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "The Figma API URL cannot accept a path.",
+                )
+            })?
+            .pop_if_empty()
+            .extend(["files", file_key, "meta"]);
+        let receipt = self
+            .execute_classified(
+                "snapshot.pull",
+                EndpointClass::GetFileMeta,
+                Some(file_key),
+                Some(request_profile.key()),
+                &url,
+                credential,
+                destination,
+            )
+            .await?;
+        let bytes = tokio::fs::read(destination).await.map_err(|error| {
+            with_network(
+                AppError::new(
+                    ErrorCode::StoreFailed,
+                    "Failed to read the staged file metadata response.",
+                )
+                .with_detail("reason", json!(error.to_string())),
+                receipt.network,
+                EndpointClass::GetFileMeta,
+            )
+        })?;
+        let response: FileMetadataResponse = serde_json::from_slice(&bytes).map_err(|error| {
+            with_network(
+                AppError::new(
+                    ErrorCode::InvalidFigmaResponse,
+                    "Figma returned an invalid file metadata response.",
+                )
+                .with_detail("reason", json!(error.to_string())),
+                receipt.network,
+                EndpointClass::GetFileMeta,
+            )
+        })?;
+        let version = response
+            .file
+            .version
+            .filter(|version| !version.trim().is_empty())
+            .ok_or_else(|| {
+                with_network(
+                    AppError::new(
+                        ErrorCode::InvalidFigmaResponse,
+                        "Figma file metadata did not include a usable version.",
+                    ),
+                    receipt.network,
+                    EndpointClass::GetFileMeta,
+                )
+            })?;
+        Ok(FileMetadataReceipt {
+            metadata: FileMetadata { version },
+            network: receipt.network,
+        })
     }
 
     /// Fetches and validates the current authenticated Figma user.
@@ -535,6 +644,10 @@ fn map_http_error(
         403 if endpoint == EndpointClass::GetCurrentUser => AppError::new(
             ErrorCode::ScopeMissing,
             "The credential cannot read the current Figma user or lacks `current_user:read`.",
+        ),
+        403 if endpoint == EndpointClass::GetFileMeta => AppError::new(
+            ErrorCode::MetadataUnavailable,
+            "The credential cannot read file metadata or lacks `file_metadata:read`.",
         ),
         403 => AppError::new(
             ErrorCode::ScopeMissing,
