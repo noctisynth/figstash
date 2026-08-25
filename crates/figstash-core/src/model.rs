@@ -221,6 +221,28 @@ pub struct StoredNode {
     pub child_ids: Vec<String>,
 }
 
+/// Lightweight indexed node state used for bulk local snapshot comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotDiffNode {
+    /// Stable Figma node identifier.
+    pub node_id: String,
+    /// Direct parent node identifier.
+    pub parent_id: Option<String>,
+    /// Figma node type string.
+    pub node_type: String,
+    /// Human-readable node name.
+    pub name: String,
+    /// Zero-based position among siblings.
+    pub sibling_order: u32,
+    /// Root-to-node identifier path.
+    pub path_ids: Vec<String>,
+    /// Content-addressed hash of this node's own raw fields, excluding children.
+    pub own_hash: String,
+    /// Deterministic hash of this node and its ordered descendants.
+    pub subtree_hash: String,
+}
+
 /// Pure-local node search filters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

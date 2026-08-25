@@ -192,6 +192,14 @@ pub(crate) struct SnapshotDiffArgs {
     pub(crate) target: String,
     pub(crate) snapshot_a: String,
     pub(crate) snapshot_b: String,
+    #[arg(long)]
+    pub(crate) node: Option<String>,
+    #[arg(long = "type")]
+    pub(crate) node_type: Option<String>,
+    #[arg(long)]
+    pub(crate) path: Option<String>,
+    #[arg(long, value_enum, default_value_t = GeometryArg::None)]
+    pub(crate) geometry: GeometryArg,
 }
 
 #[derive(Debug, Args)]

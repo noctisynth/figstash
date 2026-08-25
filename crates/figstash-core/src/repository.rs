@@ -2,7 +2,7 @@
 
 use crate::{
     ApiAttempt, AppResult, ComponentUsage, IndexedEntity, NodeSearchQuery, NodeSearchResult,
-    SnapshotSelector, SnapshotSummary, StoredNode,
+    SnapshotDiffNode, SnapshotSelector, SnapshotSummary, StoredNode,
 };
 
 /// Durable sink for locally observed Figma request attempts.
@@ -33,6 +33,13 @@ pub trait SnapshotRepository {
     ///
     /// Returns `node_not_found` or a durable storage error.
     fn load_node(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode>;
+
+    /// Loads every indexed node in deterministic preorder.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage or integrity error when indexed nodes cannot be loaded.
+    fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>>;
 
     /// Returns the document root node identifier.
     ///

@@ -1,5 +1,6 @@
 //! Pure-local application service for cached Figma data.
 
+use crate::diff::{SnapshotDiffData, SnapshotDiffFilters, compare_snapshots};
 use crate::transform::{CompactNode, DerivedVariable, compact_node, derive_variables, raw_node};
 use figstash_core::{
     AppError, AppResult, ComponentUsage, ErrorCode, IndexedEntity, NodeSearchQuery,
@@ -201,6 +202,38 @@ where
             nodes,
             next_cursor,
         })
+    }
+
+    /// Compares two immutable snapshots without any network dependency.
+    ///
+    /// # Errors
+    ///
+    /// Returns snapshot, argument, storage, or integrity errors from the local repository.
+    pub fn snapshot_diff(
+        &self,
+        selector_a: SnapshotSelector<'_>,
+        selector_b: SnapshotSelector<'_>,
+        filters: SnapshotDiffFilters<'_>,
+    ) -> AppResult<SnapshotDiffData> {
+        let snapshot_a = self.repository.resolve_snapshot(selector_a)?;
+        let snapshot_b = self.repository.resolve_snapshot(selector_b)?;
+        if snapshot_a.file_key != snapshot_b.file_key
+            || snapshot_a.request_profile != snapshot_b.request_profile
+        {
+            return Err(AppError::new(
+                ErrorCode::InvalidArguments,
+                "Snapshot diff requires snapshots from the same file and request profile.",
+            )
+            .with_details(json!({
+                "snapshotA": snapshot_a.id,
+                "snapshotB": snapshot_b.id,
+                "fileKeyA": snapshot_a.file_key,
+                "fileKeyB": snapshot_b.file_key,
+                "requestProfileA": snapshot_a.request_profile,
+                "requestProfileB": snapshot_b.request_profile,
+            })));
+        }
+        compare_snapshots(&self.repository, snapshot_a, snapshot_b, filters)
     }
 
     /// Returns a sparse local tree for Agent target discovery.

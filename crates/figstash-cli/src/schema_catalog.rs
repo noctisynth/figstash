@@ -147,7 +147,7 @@ fn input_schema(name: &str) -> Value {
         }),
         "snapshot.diff" => json!({
             "type": "object", "required": ["target", "snapshotA", "snapshotB"],
-            "properties": {"target": target, "snapshotA": snapshot, "snapshotB": snapshot},
+            "properties": {"target": target, "snapshotA": snapshot, "snapshotB": snapshot, "node": node, "type": {"type": "string"}, "path": {"type": "string"}, "geometry": geometry},
             "additionalProperties": false
         }),
         "node.get" => json!({
@@ -178,6 +178,7 @@ fn output_schema(name: &str) -> AppResult<Value> {
         "snapshot.pull" => include_str!("../schemas/cli/v1/snapshot.pull.schema.json"),
         "snapshot.status" => include_str!("../schemas/cli/v1/snapshot.status.schema.json"),
         "snapshot.list" => include_str!("../schemas/cli/v1/snapshot.list.schema.json"),
+        "snapshot.diff" => include_str!("../schemas/cli/v1/snapshot.diff.schema.json"),
         "snapshot.prune" => include_str!("../schemas/cli/v1/snapshot.prune.schema.json"),
         "node.get" => include_str!("../schemas/cli/v1/node.get.schema.json"),
         "node.search" => include_str!("../schemas/cli/v1/node.search.schema.json"),
@@ -212,6 +213,12 @@ fn errors(name: &str) -> Vec<&'static str> {
             "snapshot_missing",
             "snapshot_not_found",
             "node_not_found",
+            "invalid_arguments",
+            "store_corrupt",
+            "store_failed",
+        ],
+        "snapshot.diff" => vec![
+            "snapshot_not_found",
             "invalid_arguments",
             "store_corrupt",
             "store_failed",
@@ -259,6 +266,10 @@ fn examples(name: &str) -> Vec<&'static str> {
         "snapshot.pull" => vec![
             "figstash snapshot pull FILE_KEY",
             "figstash snapshot pull FILE_KEY --force",
+        ],
+        "snapshot.diff" => vec![
+            "figstash snapshot diff FILE_KEY SNAPSHOT_A SNAPSHOT_B",
+            "figstash snapshot diff FILE_KEY SNAPSHOT_A SNAPSHOT_B --node 2:1 --type FRAME",
         ],
         "node.get" => vec!["figstash node get FILE_KEY --node 2:1 --view raw"],
         "node.search" => vec!["figstash node search FILE_KEY --name Card --type FRAME"],

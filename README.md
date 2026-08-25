@@ -57,11 +57,18 @@ figstash node search FILE_KEY --name Card --type FRAME
 figstash node search FILE_KEY --text 'Hello Agent'
 figstash tokens get FILE_KEY
 figstash components list FILE_KEY
+figstash snapshot diff FILE_KEY SNAPSHOT_A SNAPSHOT_B
 figstash snapshot status FILE_KEY
 figstash snapshot list
 figstash snapshot prune
 figstash quota status
 ```
+
+`snapshot diff` compares two immutable snapshots entirely locally. It reports
+added, removed, own-field-changed, moved, and descendant-only nodes, plus
+style/component/component-set map changes. Use `--node`, `--type`, and
+`--path 0:0/1:2/...` to filter node results; filters do not hide entity-map
+changes. Both snapshots must belong to the same file and request profile.
 
 For the one-way design-to-code handoff, `context` is the preferred Agent-facing
 shortcut:
@@ -84,8 +91,7 @@ contracts, for example `figstash schema snapshot.pull`.
 
 `snapshot prune` only plans deletion. `snapshot prune --execute` performs the
 reported permanent deletion and never removes the sole snapshot or a current
-HEAD. `snapshot diff` is present as a stable command but returns
-`not_implemented` until P1.
+HEAD.
 
 Every normal invocation writes exactly one JSON object plus a newline to stdout.
 Errors use the same envelope and stable exit codes; diagnostics only use stderr.

@@ -294,7 +294,7 @@ figstash snapshot pull <figma-url-or-file-key> --force
 figstash snapshot pull <figma-url-or-file-key> --geometry paths
 figstash snapshot status <file-key>
 figstash snapshot list
-figstash snapshot diff <file-key> <snapshot-a> <snapshot-b>
+figstash snapshot diff <file-key> <snapshot-a> <snapshot-b> [--node <node-id>] [--type <node-type>] [--path <id/id/...>]
 figstash snapshot prune
 figstash snapshot prune --execute
 
@@ -531,7 +531,22 @@ Figma 官方 OpenAPI spec 仍为 beta。Figstash 不把完整 codegen 类型作�
 
 遍历必须是确定性的，保持 Figma children 顺序。`subtree_hash` 基于规范化节点字段和有序 child hashes，用于本地 diff，不作为 Figma 版本的替代。
 
-### 11.3 Compact context
+### 11.3 Snapshot diff v1
+
+`snapshot diff` 是严格离线的本地比较，只能读取同一 file key、同一 request profile 的两个不可变快照。参数顺序定义方向：`snapshot-a` 是 before，`snapshot-b` 是 after；快照不存在返回 `snapshot_not_found`，文件或 profile 不一致返回 `invalid_arguments`。
+
+节点以稳定 node ID 对齐并输出以下分类：
+
+- `added` / `removed`：node ID 只存在于 after / before；
+- `changed`：同一 node ID 的自身 `node_blob_hash` 变化；索引时已从自身 raw 中移除 `children`，该 content-addressed blob hash 可直接从 SQLite 批量读取，因此后代变化不会被误算为自身变化，也不需要为 diff 逐节点解压 raw blob；
+- `moved`：同一 node ID 的直接 `parentId` 或 `siblingOrder` 变化；节点可以同时属于 `changed` 和 `moved`；
+- `descendantOnly`：自身字段、直接 parent 和 sibling order 均未变化，但 `subtreeHash` 变化。
+
+`--node ID` 将比较限定为 before 或 after 中以该 ID 为根的子树；`--type TYPE` 只保留该节点类型；`--path ID/ID/...` 使用存储的 `pathIds` 做根起始的精确前缀过滤。节点或 path 过滤在 before、after 任一侧匹配即保留，避免移动和增删导致结果丢失。三个过滤条件同时存在时按 AND 组合，只影响 node 分类，不裁剪 style/component/component-set 实体差异。
+
+输出 `snapshotA`、`snapshotB`、分类计数、`nodes.{added,removed,changed,moved,descendantOnly}`，以及 `entities.{styles,components,componentSets}`。added/removed 节点输出单侧状态；其余节点输出 before/after 状态。节点状态至少包含 `nodeId`、`name`、`nodeType`、`parentId`、`siblingOrder`、`pathIds` 和 `subtreeHash`。实体按 ID 对齐并分别输出 added/removed/changed；changed 包含完整 before/after `IndexedEntity`。所有数组按 node ID 或 entity ID 确定性排序，不分页。
+
+### 11.4 Compact context
 
 `node get` 默认 `--view compact`，包含：
 
@@ -815,6 +830,7 @@ GetCurrentUser -> Tier3
 - JSON envelope/schema、error code 和 exit code 映射；
 - request profile/hash 的确定性；
 - node tree 遍历、depth、subtree hash；
+- snapshot diff 的自身/后代/移动分类、组合过滤和确定性顺序；
 - compact transformer、globalVars 去重；
 - prune 计划和 blob 引用计数；
 - token redaction。
@@ -823,6 +839,7 @@ GetCurrentUser -> Tier3
 
 - mock Figma API：200、403、404、429、5xx、timeout、截断 JSON；
 - 首次 pull、已有快照普通 pull fail-closed、force 的请求次数断言；
+- snapshot diff 的 added/removed/changed/moved/descendant-only、实体变化、profile 不一致和零网络断言；
 - 对每个 local query 安装“网络即失败”的 transport，证明零请求；
 - 并发两个 pull 最多产生一次 Tier 1；
 - staging 中途崩溃后旧 HEAD 仍可读；

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshotA", "snapshotB", "summary", "nodes", "entities"],
+  "properties": {
+    "snapshotA": { "type": "object" },
+    "snapshotB": { "type": "object" },
+    "summary": {
+      "type": "object",
+      "required": ["added", "removed", "changed", "moved", "descendantOnly", "styles", "components", "componentSets"],
+      "properties": {
+        "added": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 },
+        "changed": { "type": "integer", "minimum": 0 },
+        "moved": { "type": "integer", "minimum": 0 },
+        "descendantOnly": { "type": "integer", "minimum": 0 },
+        "styles": { "$ref": "#/$defs/counts" },
+        "components": { "$ref": "#/$defs/counts" },
+        "componentSets": { "$ref": "#/$defs/counts" }
+      },
+      "additionalProperties": false
+    },
+    "nodes": {
+      "type": "object",
+      "required": ["added", "removed", "changed", "moved", "descendantOnly"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/nodeState" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/nodeState" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/nodeChange" } },
+        "moved": { "type": "array", "items": { "$ref": "#/$defs/nodeChange" } },
+        "descendantOnly": { "type": "array", "items": { "$ref": "#/$defs/nodeChange" } }
+      },
+      "additionalProperties": false
+    },
+    "entities": {
+      "type": "object",
+      "required": ["styles", "components", "componentSets"],
+      "properties": {
+        "styles": { "$ref": "#/$defs/entityDiff" },
+        "components": { "$ref": "#/$defs/entityDiff" },
+        "componentSets": { "$ref": "#/$defs/entityDiff" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 },
+        "changed": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "nodeState": {
+      "type": "object",
+      "required": ["nodeId", "name", "nodeType", "parentId", "siblingOrder", "pathIds", "subtreeHash"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "nodeType": { "type": "string", "minLength": 1 },
+        "parentId": { "type": ["string", "null"] },
+        "siblingOrder": { "type": "integer", "minimum": 0 },
+        "pathIds": { "type": "array", "items": { "type": "string" } },
+        "subtreeHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "nodeChange": {
+      "type": "object",
+      "required": ["nodeId", "before", "after"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1 },
+        "before": { "$ref": "#/$defs/nodeState" },
+        "after": { "$ref": "#/$defs/nodeState" }
+      },
+      "additionalProperties": false
+    },
+    "entity": {
+      "type": "object",
+      "required": ["id", "nodeId", "name", "entityType", "raw"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "nodeId": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "entityType": { "type": "string" },
+        "raw": {}
+      },
+      "additionalProperties": false
+    },
+    "entityChange": {
+      "type": "object",
+      "required": ["id", "before", "after"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "before": { "$ref": "#/$defs/entity" },
+        "after": { "$ref": "#/$defs/entity" }
+      },
+      "additionalProperties": false
+    },
+    "entityDiff": {
+      "type": "object",
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/entityChange" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -67,6 +67,36 @@ fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary
     (temporary, store, summary)
 }
 
+fn prepared_diff_store() -> (
+    tempfile::TempDir,
+    figstash_core::SnapshotSummary,
+    figstash_core::SnapshotSummary,
+) {
+    let temporary =
+        tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+    let store = Store::open(temporary.path())
+        .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
+    let commit = |bytes: &[u8]| {
+        let indexed =
+            parse_file(bytes).unwrap_or_else(|error| panic!("diff fixture parse failed: {error}"));
+        let stage = store
+            .create_staging_file()
+            .unwrap_or_else(|error| panic!("staging allocation failed: {error}"));
+        fs::write(&stage, bytes)
+            .unwrap_or_else(|error| panic!("diff fixture staging failed: {error}"));
+        store
+            .commit_snapshot(FILE_KEY, RequestProfile::default().key(), &stage, &indexed)
+            .unwrap_or_else(|error| panic!("diff snapshot commit failed: {error}"))
+    };
+    let before = commit(include_bytes!(
+        "../../../fixtures/figma/snapshot-diff-before.json"
+    ));
+    let after = commit(include_bytes!(
+        "../../../fixtures/figma/snapshot-diff-after.json"
+    ));
+    (temporary, before, after)
+}
+
 #[test]
 fn every_core_local_command_emits_one_schema_valid_json_object() {
     let (temporary, _store, _summary) = prepared_store();
@@ -183,6 +213,38 @@ fn high_level_agent_commands_are_local_safe_and_unambiguous() {
     let conflict = parse_single_stdout(&conflict);
     assert_eq!(conflict["error"]["code"], "invalid_arguments");
     assert_eq!(conflict["meta"]["network"]["attempts"], 0);
+}
+
+#[test]
+fn snapshot_diff_is_schema_valid_filtered_and_zero_network() {
+    let (temporary, before, after) = prepared_diff_store();
+    let output = run_cli(
+        temporary.path(),
+        &[
+            "snapshot", "diff", FILE_KEY, &before.id, &after.id, "--node", "1:2", "--type",
+            "FRAME", "--path", "0:0/1:2",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "snapshot diff failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response = parse_single_stdout(&output);
+    assert_eq!(response["meta"]["command"], "snapshot.diff");
+    assert_eq!(response["meta"]["source"], "cache");
+    assert_eq!(response["meta"]["network"]["attempts"], 0);
+    assert_eq!(response["data"]["summary"]["changed"], 1);
+    assert_eq!(response["data"]["summary"]["moved"], 1);
+    assert_eq!(response["data"]["nodes"]["changed"][0]["nodeId"], "5:1");
+    validate_schema(
+        include_str!("../../../schemas/cli/v1/envelope.schema.json"),
+        &response,
+    );
+    validate_schema(
+        include_str!("../../../schemas/cli/v1/snapshot.diff.schema.json"),
+        &response["data"],
+    );
 }
 
 #[test]
@@ -496,6 +558,9 @@ fn schema_for(command: &str) -> &'static str {
         }
         "snapshot.list" => {
             include_str!("../../../schemas/cli/v1/snapshot.list.schema.json")
+        }
+        "snapshot.diff" => {
+            include_str!("../../../schemas/cli/v1/snapshot.diff.schema.json")
         }
         "snapshot.prune" => {
             include_str!("../../../schemas/cli/v1/snapshot.prune.schema.json")

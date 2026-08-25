@@ -6,7 +6,8 @@ use chrono::{DateTime, Datelike, Utc};
 use figstash_core::{
     ApiAttempt, AppError, AppResult, AttemptRecorder, BoundingBox, ComponentUsage, EndpointClass,
     ErrorCode, IndexedEntity, IndexedNode, IndexedSnapshot, NodeSearchQuery, NodeSearchResult,
-    PARSER_VERSION, SnapshotRepository, SnapshotSelector, SnapshotSummary, StoredNode, Tier,
+    PARSER_VERSION, SnapshotDiffNode, SnapshotRepository, SnapshotSelector, SnapshotSummary,
+    StoredNode, Tier,
 };
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -912,6 +913,49 @@ impl SnapshotRepository for Store {
             },
             child_ids,
         })
+    }
+
+    fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT node_id,parent_id,node_type,name,sibling_order,path_ids,
+                        node_blob_hash,subtree_hash
+                 FROM nodes WHERE snapshot_id=?1 ORDER BY node_id",
+            )
+            .map_err(|error| sql_error("Failed to prepare snapshot node loading.", error))?;
+        let rows = statement
+            .query_map([snapshot_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, u32>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .map_err(|error| sql_error("Failed to load snapshot node rows.", error))?;
+        let rows = collect_rows(rows, "Failed to decode a snapshot node row.")?;
+        let mut nodes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let path_ids = serde_json::from_str(&row.5).map_err(|error| {
+                corrupt_error("A node path index does not contain valid JSON.", error)
+            })?;
+            nodes.push(SnapshotDiffNode {
+                node_id: row.0,
+                parent_id: row.1,
+                node_type: row.2,
+                name: row.3,
+                sibling_order: row.4,
+                path_ids,
+                own_hash: row.6,
+                subtree_hash: row.7,
+            });
+        }
+        Ok(nodes)
     }
 
     fn root_node_id(&self, snapshot_id: &str) -> AppResult<String> {

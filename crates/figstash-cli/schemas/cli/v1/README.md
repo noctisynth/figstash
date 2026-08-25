@@ -13,6 +13,9 @@ Agent-facing high-level command schemas are:
 - `outline.schema.json`: sparse node discovery tree;
 - `schema.schema.json`: command catalog or one detailed command contract.
 
+Snapshot comparison uses `snapshot.diff.schema.json`; it reports deterministic
+node and indexed-entity changes between two immutable local snapshots.
+
 Authentication schemas distinguish local presence from remote identity:
 
 - `auth.status.schema.json`: zero-network local credential presence;

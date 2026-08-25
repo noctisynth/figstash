@@ -1,0 +1,47 @@
+{
+  "name": "Diff Fixture",
+  "version": "2",
+  "lastModified": "2026-08-24T00:01:00Z",
+  "document": {
+    "id": "0:0",
+    "name": "Document",
+    "type": "DOCUMENT",
+    "children": [
+      {
+        "id": "1:1",
+        "name": "Page A",
+        "type": "CANVAS",
+        "children": [
+          {
+            "id": "2:1",
+            "name": "Card",
+            "type": "FRAME",
+            "children": [
+              { "id": "3:1", "name": "Title", "type": "TEXT", "characters": "After" },
+              { "id": "7:1", "name": "Added", "type": "ELLIPSE" }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "1:2",
+        "name": "Page B",
+        "type": "CANVAS",
+        "children": [
+          { "id": "5:1", "name": "Moved and renamed", "type": "FRAME" }
+        ]
+      }
+    ]
+  },
+  "styles": {
+    "S:1": { "key": "style-key", "name": "Primary", "styleType": "FILL", "description": "After" },
+    "S:2": { "key": "style-key-2", "name": "Secondary", "styleType": "FILL" }
+  },
+  "components": {
+    "C:1": { "key": "component-key", "name": "Button", "description": "After" },
+    "C:2": { "key": "component-key-2", "name": "Icon" }
+  },
+  "componentSets": {
+    "CS:1": { "key": "set-key", "name": "Controls", "description": "After" }
+  }
+}

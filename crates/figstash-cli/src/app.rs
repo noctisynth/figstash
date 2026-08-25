@@ -2,7 +2,8 @@
 
 use crate::args::{
     AuthSubcommand, Cli, Command, ComponentsSubcommand, ContextArgs, GeometryArg, NodeSubcommand,
-    OutlineArgs, QuotaSubcommand, SchemaArgs, SnapshotSubcommand, TokensSubcommand, ViewArg,
+    OutlineArgs, QuotaSubcommand, SchemaArgs, SnapshotDiffArgs, SnapshotSubcommand,
+    TokensSubcommand, ViewArg,
 };
 use crate::config::AppConfig;
 use crate::output::{CommandOutput, emit_failure, emit_success};
@@ -14,7 +15,7 @@ use figstash_figma::{
     Credential, FigmaGateway, FigmaTarget, FigmaTransport, PatProvider, ReqwestTransport,
     SystemKeyring, normalize_node_id, parse_figma_target,
 };
-use figstash_query::{NodeGetOptions, QueryService, View, parse_file};
+use figstash_query::{NodeGetOptions, QueryService, SnapshotDiffFilters, View, parse_file};
 use figstash_store::Store;
 use serde_json::json;
 use std::fs;
@@ -88,18 +89,7 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
                         .list_snapshots(file_key.as_ref().map(figstash_figma::FigmaTarget::effective_file_key))?
                 }))
             }
-            SnapshotSubcommand::Diff(args) => {
-                let target = parse_figma_target(&args.target)?;
-                Err(AppError::new(
-                    ErrorCode::NotImplemented,
-                    "Snapshot diff is scheduled for P1 and is not implemented in the P0 CLI.",
-                )
-                .with_details(json!({
-                    "fileKey": target.effective_file_key(),
-                    "snapshotA": args.snapshot_a,
-                    "snapshotB": args.snapshot_b,
-                })))
-            }
+            SnapshotSubcommand::Diff(args) => snapshot_diff(config, args),
             SnapshotSubcommand::Prune(args) => {
                 let store = Store::open(&config.data_dir)?;
                 if args.execute {
@@ -142,6 +132,31 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
             }
         },
     }
+}
+
+fn snapshot_diff(config: &AppConfig, args: &SnapshotDiffArgs) -> AppResult<CommandOutput> {
+    let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
+    let profile = request_profile(args.geometry);
+    let path_prefix = args.path.as_deref().map(parse_diff_path).transpose()?;
+    let service = QueryService::new(Store::open(&config.data_dir)?);
+    let data = service.snapshot_diff(
+        SnapshotSelector {
+            file_key: target.effective_file_key(),
+            request_profile: profile.key(),
+            snapshot_id: Some(&args.snapshot_a),
+        },
+        SnapshotSelector {
+            file_key: target.effective_file_key(),
+            request_profile: profile.key(),
+            snapshot_id: Some(&args.snapshot_b),
+        },
+        SnapshotDiffFilters {
+            node_id: node_id.as_deref(),
+            node_type: args.node_type.as_deref(),
+            path_prefix: path_prefix.as_deref(),
+        },
+    )?;
+    serialize_local(data)
 }
 
 fn context_get(config: &AppConfig, args: &ContextArgs) -> AppResult<CommandOutput> {
@@ -487,6 +502,27 @@ fn target_and_node(
     }
     let node_id = explicit_node.or_else(|| target.node_id.clone());
     Ok((target, node_id))
+}
+
+fn parse_diff_path(path: &str) -> AppResult<Vec<String>> {
+    if path.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::InvalidArguments,
+            "Snapshot diff path must contain at least one node ID.",
+        ));
+    }
+    path.split('/')
+        .map(|segment| {
+            if segment.is_empty() {
+                Err(AppError::new(
+                    ErrorCode::InvalidArguments,
+                    "Snapshot diff path cannot contain an empty segment.",
+                ))
+            } else {
+                normalize_node_id(segment)
+            }
+        })
+        .collect()
 }
 
 fn node_search(config: &AppConfig, args: &crate::args::NodeSearchArgs) -> AppResult<CommandOutput> {

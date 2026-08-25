@@ -76,9 +76,18 @@ figstash --offline node search FILE_KEY --name Card --type FRAME
 figstash --offline node search FILE_KEY --text 'Hello Agent'
 figstash --offline tokens get FILE_KEY
 figstash --offline components list FILE_KEY
+figstash --offline snapshot diff FILE_KEY SNAPSHOT_A SNAPSHOT_B
 ```
 
 Use `--snapshot <id>` for a historical immutable snapshot. `--geometry paths` selects a lineage captured with vector paths; it does not generate geometry that was not pulled.
+
+Compare two immutable snapshots with `snapshot diff FILE_KEY SNAPSHOT_A SNAPSHOT_B`.
+The result categorizes added, removed, own-field-changed, moved, and
+descendant-only nodes and separately reports style/component/component-set map
+changes. `--node ID`, `--type TYPE`, and `--path ID/ID/...` combine as node
+filters; entity-map changes remain complete. The snapshots must share a file key
+and request profile. This command is always local and records zero network
+attempts.
 
 ## Snapshot and request rules
 
@@ -109,7 +118,7 @@ figstash auth status
 figstash auth whoami
 ```
 
-`snapshot prune` is a dry-run plan. `snapshot prune --execute` permanently removes eligible snapshots but preserves the sole snapshot and current HEAD. `snapshot diff` currently returns `not_implemented`.
+`snapshot prune` is a dry-run plan. `snapshot prune --execute` permanently removes eligible snapshots but preserves the sole snapshot and current HEAD.
 
 ## Choosing commands
 

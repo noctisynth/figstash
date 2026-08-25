@@ -12,7 +12,7 @@ pub use error::{AppError, AppResult, ErrorCode, ExitCode};
 pub use model::{
     ApiAttempt, BoundingBox, ComponentUsage, CredentialKind, EndpointClass, GeometryMode,
     IndexedEntity, IndexedNode, IndexedSnapshot, NodeSearchQuery, NodeSearchResult, RequestProfile,
-    SnapshotSelector, SnapshotSummary, StoredNode, Tier,
+    SnapshotDiffNode, SnapshotSelector, SnapshotSummary, StoredNode, Tier,
 };
 pub use repository::{AttemptRecorder, SnapshotRepository};
 pub use response::{

@@ -231,11 +231,12 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 
 ### P1.2 Snapshot diff
 
-- [ ] 实现 `figstash snapshot diff`。
-- [ ] 输出 added/removed/changed/moved nodes。
-- [ ] 区分 node 自身字段变化和 descendant-only 变化。
-- [ ] 支持按 node/type/path 限定。
-- [ ] 为重命名、移动、style/component 变化建立 fixture。
+- [x] 实现 `figstash snapshot diff`。
+- [x] 输出 added/removed/changed/moved nodes。
+- [x] 区分 node 自身字段变化和 descendant-only 变化。
+- [x] 支持按 node/type/path 限定。
+- [x] 为重命名、移动、style/component 变化建立 fixture。
+- [x] 固化并验证 snapshot diff v1 JSON Schema、零网络契约和确定性排序。
 
 ### P1.3 Cache policy 与迁移
 
