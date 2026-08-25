@@ -614,6 +614,7 @@ mod tests {
     struct MemoryLedger(Arc<Mutex<Vec<ApiAttempt>>>);
 
     impl AttemptRecorder for MemoryLedger {
+        #[allow(unknown_lints)]
         #[allow(clippy::unused_async_trait_impl)]
         async fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()> {
             self.0

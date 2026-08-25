@@ -1,4 +1,4 @@
-//! Toasty models for the durable SQLite catalog.
+//! Toasty models for the durable `SQLite` catalog.
 
 #[derive(Debug, Clone, toasty::Model)]
 #[table = "snapshots"]
