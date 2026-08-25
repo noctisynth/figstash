@@ -1,5 +1,20 @@
 # Changelog
 
+<!-- semifold:release version=0.1.0-alpha.1 -->
+## v0.1.0-alpha.1
+
+### Bug Fixes
+
+- [`e03c4ab`](https://github.com/noctisynth/figstash/commit/e03c4ab445b29b727640643d5c1d4ab0bf7b49ce): Remove unreliable metadata-driven automatic refresh and restore zero-network fail-closed behavior for existing snapshots.
+- [`7b199cc`](https://github.com/noctisynth/figstash/commit/7b199cc383e431571216f2a7f17c75310a5d991a): Keep test and documentation lints compatible with the Rust 1.95 Clippy used by CI.
+
+### Refactors
+
+- [`053672f`](https://github.com/noctisynth/figstash/commit/053672fa82630c84adaa1b7eb8fb080931a86c5a): Move the durable SQLite catalog to Toasty models and async repository APIs while preserving store-v1 compatibility and raw SQL for SQLite-specific features.
+
+    Raise the workspace MSRV to Rust 1.95, as required by Toasty.
+<!-- semifold:release:end -->
+
 <!-- semifold:release version=0.1.0-alpha.0 -->
 ## v0.1.0-alpha.0
 
