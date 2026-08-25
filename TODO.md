@@ -240,6 +240,8 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 
 ### P1.3 Cache policy 与迁移
 
+- [x] 将 SQLite catalog 的常规模型与 CRUD 迁移到 Toasty，保留 FTS5/PRAGMA/JSON1 的 Toasty raw SQL 路径，并将 repository/ledger 调用链 async 化。
+- [x] 将 workspace MSRV 提升到 Rust 1.95，并同步 CI 与开发文档。
 - [ ] 实现可选 `stale_after`，只影响状态。
 - [ ] 实现 SQLite migration 备份、校验和、rollback-on-failure。
 - [ ] 实现从 raw blob 全量重建派生索引。

@@ -122,7 +122,7 @@ Automatic metadata probing is disabled, so the CLI does not require
 
 ## Development
 
-The workspace uses Rust edition 2024 and has an MSRV of Rust 1.85.
+The workspace uses Rust edition 2024 and has an MSRV of Rust 1.95.
 
 ```bash
 cargo fmt --all --check

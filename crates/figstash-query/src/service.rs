@@ -152,29 +152,32 @@ where
     /// # Errors
     ///
     /// Returns local-data, integrity, or serialization errors; it never accesses a network.
-    pub fn node_get(&self, options: NodeGetOptions<'_>) -> AppResult<NodeGetData> {
-        let snapshot = self.repository.resolve_snapshot(options.selector)?;
+    pub async fn node_get(&self, options: NodeGetOptions<'_>) -> AppResult<NodeGetData> {
+        let snapshot = self.repository.resolve_snapshot(options.selector).await?;
         let node_id = match options.node_id {
             Some(node_id) => node_id.to_owned(),
-            None => self.repository.root_node_id(&snapshot.id)?,
+            None => self.repository.root_node_id(&snapshot.id).await?,
         };
         let (node, references) = match options.view {
             View::Compact => {
                 let mut selected_nodes = Vec::new();
-                let node = self.load_compact(
-                    &snapshot.id,
-                    &node_id,
-                    options.depth,
-                    0,
-                    &mut selected_nodes,
-                )?;
+                let node = self
+                    .load_compact(
+                        &snapshot.id,
+                        &node_id,
+                        options.depth,
+                        0,
+                        &mut selected_nodes,
+                    )
+                    .await?;
                 (
                     serde_json::to_value(node).map_err(|error| serialization_error(&error))?,
-                    Some(self.node_references(&snapshot.id, &selected_nodes)?),
+                    Some(self.node_references(&snapshot.id, &selected_nodes).await?),
                 )
             }
             View::Raw => (
-                self.load_raw(&snapshot.id, &node_id, options.depth, 0)?,
+                self.load_raw(&snapshot.id, &node_id, options.depth, 0)
+                    .await?,
                 None,
             ),
         };
@@ -190,13 +193,13 @@ where
     /// # Errors
     ///
     /// Returns input, local-data, or storage errors from the local repository.
-    pub fn node_search(
+    pub async fn node_search(
         &self,
         selector: SnapshotSelector<'_>,
         query: &NodeSearchQuery,
     ) -> AppResult<SearchData> {
-        let snapshot = self.repository.resolve_snapshot(selector)?;
-        let (nodes, next_cursor) = self.repository.search_nodes(&snapshot.id, query)?;
+        let snapshot = self.repository.resolve_snapshot(selector).await?;
+        let (nodes, next_cursor) = self.repository.search_nodes(&snapshot.id, query).await?;
         Ok(SearchData {
             snapshot,
             nodes,
@@ -209,14 +212,14 @@ where
     /// # Errors
     ///
     /// Returns snapshot, argument, storage, or integrity errors from the local repository.
-    pub fn snapshot_diff(
+    pub async fn snapshot_diff(
         &self,
         selector_a: SnapshotSelector<'_>,
         selector_b: SnapshotSelector<'_>,
         filters: SnapshotDiffFilters<'_>,
     ) -> AppResult<SnapshotDiffData> {
-        let snapshot_a = self.repository.resolve_snapshot(selector_a)?;
-        let snapshot_b = self.repository.resolve_snapshot(selector_b)?;
+        let snapshot_a = self.repository.resolve_snapshot(selector_a).await?;
+        let snapshot_b = self.repository.resolve_snapshot(selector_b).await?;
         if snapshot_a.file_key != snapshot_b.file_key
             || snapshot_a.request_profile != snapshot_b.request_profile
         {
@@ -233,7 +236,7 @@ where
                 "requestProfileB": snapshot_b.request_profile,
             })));
         }
-        compare_snapshots(&self.repository, snapshot_a, snapshot_b, filters)
+        compare_snapshots(&self.repository, snapshot_a, snapshot_b, filters).await
     }
 
     /// Returns a sparse local tree for Agent target discovery.
@@ -241,18 +244,18 @@ where
     /// # Errors
     ///
     /// Returns local-data or integrity errors; it never accesses a network.
-    pub fn outline(
+    pub async fn outline(
         &self,
         selector: SnapshotSelector<'_>,
         node_id: Option<&str>,
         depth: u32,
     ) -> AppResult<OutlineData> {
-        let snapshot = self.repository.resolve_snapshot(selector)?;
+        let snapshot = self.repository.resolve_snapshot(selector).await?;
         let node_id = match node_id {
             Some(node_id) => node_id.to_owned(),
-            None => self.repository.root_node_id(&snapshot.id)?,
+            None => self.repository.root_node_id(&snapshot.id).await?,
         };
-        let root = self.load_outline(&snapshot.id, &node_id, depth, 0)?;
+        let root = self.load_outline(&snapshot.id, &node_id, depth, 0).await?;
         Ok(OutlineData { snapshot, root })
     }
 
@@ -261,13 +264,14 @@ where
     /// # Errors
     ///
     /// Returns local-data, integrity, or deterministic transformation errors.
-    pub fn tokens_get(&self, selector: SnapshotSelector<'_>) -> AppResult<TokensData> {
-        let snapshot = self.repository.resolve_snapshot(selector)?;
-        let root_id = self.repository.root_node_id(&snapshot.id)?;
+    pub async fn tokens_get(&self, selector: SnapshotSelector<'_>) -> AppResult<TokensData> {
+        let snapshot = self.repository.resolve_snapshot(selector).await?;
+        let root_id = self.repository.root_node_id(&snapshot.id).await?;
         let mut nodes = Vec::new();
-        self.collect_nodes(&snapshot.id, &root_id, &mut nodes)?;
+        self.collect_nodes(&snapshot.id, &root_id, &mut nodes)
+            .await?;
         Ok(TokensData {
-            named_styles: self.repository.load_styles(&snapshot.id)?,
+            named_styles: self.repository.load_styles(&snapshot.id).await?,
             global_vars: derive_variables(&nodes)?,
             global_vars_source: "derived_from_file_content".to_owned(),
             snapshot,
@@ -279,16 +283,20 @@ where
     /// # Errors
     ///
     /// Returns local-data, integrity, or storage errors from the repository.
-    pub fn components_list(&self, selector: SnapshotSelector<'_>) -> AppResult<ComponentsData> {
-        let snapshot = self.repository.resolve_snapshot(selector)?;
-        let components = self.repository.load_components(&snapshot.id)?;
-        let component_sets = self.repository.load_component_sets(&snapshot.id)?;
+    pub async fn components_list(
+        &self,
+        selector: SnapshotSelector<'_>,
+    ) -> AppResult<ComponentsData> {
+        let snapshot = self.repository.resolve_snapshot(selector).await?;
+        let components = self.repository.load_components(&snapshot.id).await?;
+        let component_sets = self.repository.load_component_sets(&snapshot.id).await?;
         let mut usage = BTreeMap::new();
         for component in &components {
             usage.insert(
                 component.id.clone(),
                 self.repository
-                    .component_usage(&snapshot.id, &component.id)?,
+                    .component_usage(&snapshot.id, &component.id)
+                    .await?,
             );
         }
         Ok(ComponentsData {
@@ -299,7 +307,8 @@ where
         })
     }
 
-    fn load_compact(
+    #[async_recursion::async_recursion(?Send)]
+    async fn load_compact(
         &self,
         snapshot_id: &str,
         node_id: &str,
@@ -307,24 +316,27 @@ where
         current_depth: u32,
         selected_nodes: &mut Vec<StoredNode>,
     ) -> AppResult<CompactNode> {
-        let node = self.load_node_with_candidates(snapshot_id, node_id)?;
+        let node = self.load_node_with_candidates(snapshot_id, node_id).await?;
         selected_nodes.push(node.clone());
         let mut children = Vec::new();
         if max_depth.is_none_or(|maximum| current_depth < maximum) {
             for child_id in &node.child_ids {
-                children.push(self.load_compact(
-                    snapshot_id,
-                    child_id,
-                    max_depth,
-                    current_depth + 1,
-                    selected_nodes,
-                )?);
+                children.push(
+                    self.load_compact(
+                        snapshot_id,
+                        child_id,
+                        max_depth,
+                        current_depth + 1,
+                        selected_nodes,
+                    )
+                    .await?,
+                );
             }
         }
         Ok(compact_node(&node, children))
     }
 
-    fn node_references(
+    async fn node_references(
         &self,
         snapshot_id: &str,
         selected_nodes: &[StoredNode],
@@ -344,13 +356,15 @@ where
 
         let named_styles = self
             .repository
-            .load_styles(snapshot_id)?
+            .load_styles(snapshot_id)
+            .await?
             .into_iter()
             .filter(|style| style_ids.contains(style.id.as_str()))
             .collect();
         let components = self
             .repository
-            .load_components(snapshot_id)?
+            .load_components(snapshot_id)
+            .await?
             .into_iter()
             .filter(|component| {
                 component_ids.contains(component.id.as_str())
@@ -362,7 +376,8 @@ where
             .collect();
         let component_sets = self
             .repository
-            .load_component_sets(snapshot_id)?
+            .load_component_sets(snapshot_id)
+            .await?
             .into_iter()
             .filter(|component_set| {
                 component_set
@@ -381,46 +396,44 @@ where
         })
     }
 
-    fn load_raw(
+    #[async_recursion::async_recursion(?Send)]
+    async fn load_raw(
         &self,
         snapshot_id: &str,
         node_id: &str,
         max_depth: Option<u32>,
         current_depth: u32,
     ) -> AppResult<Value> {
-        let node = self.load_node_with_candidates(snapshot_id, node_id)?;
+        let node = self.load_node_with_candidates(snapshot_id, node_id).await?;
         let mut children = Vec::new();
         if max_depth.is_none_or(|maximum| current_depth < maximum) {
             for child_id in &node.child_ids {
-                children.push(self.load_raw(
-                    snapshot_id,
-                    child_id,
-                    max_depth,
-                    current_depth + 1,
-                )?);
+                children.push(
+                    self.load_raw(snapshot_id, child_id, max_depth, current_depth + 1)
+                        .await?,
+                );
             }
         }
         Ok(raw_node(&node, children))
     }
 
-    fn load_outline(
+    #[async_recursion::async_recursion(?Send)]
+    async fn load_outline(
         &self,
         snapshot_id: &str,
         node_id: &str,
         max_depth: u32,
         current_depth: u32,
     ) -> AppResult<OutlineNode> {
-        let node = self.load_node_with_candidates(snapshot_id, node_id)?;
+        let node = self.load_node_with_candidates(snapshot_id, node_id).await?;
         let child_count = node.child_ids.len();
         let mut children = Vec::new();
         if current_depth < max_depth {
             for child_id in &node.child_ids {
-                children.push(self.load_outline(
-                    snapshot_id,
-                    child_id,
-                    max_depth,
-                    current_depth + 1,
-                )?);
+                children.push(
+                    self.load_outline(snapshot_id, child_id, max_depth, current_depth + 1)
+                        .await?,
+                );
             }
         }
         Ok(OutlineNode {
@@ -435,26 +448,34 @@ where
         })
     }
 
-    fn collect_nodes(
+    #[async_recursion::async_recursion(?Send)]
+    async fn collect_nodes(
         &self,
         snapshot_id: &str,
         node_id: &str,
         output: &mut Vec<StoredNode>,
     ) -> AppResult<()> {
-        let node = self.repository.load_node(snapshot_id, node_id)?;
+        let node = self.repository.load_node(snapshot_id, node_id).await?;
         let child_ids = node.child_ids.clone();
         output.push(node);
         for child_id in child_ids {
-            self.collect_nodes(snapshot_id, &child_id, output)?;
+            self.collect_nodes(snapshot_id, &child_id, output).await?;
         }
         Ok(())
     }
 
-    fn load_node_with_candidates(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode> {
-        match self.repository.load_node(snapshot_id, node_id) {
+    async fn load_node_with_candidates(
+        &self,
+        snapshot_id: &str,
+        node_id: &str,
+    ) -> AppResult<StoredNode> {
+        match self.repository.load_node(snapshot_id, node_id).await {
             Ok(node) => Ok(node),
             Err(error) if error.code() == ErrorCode::NodeNotFound => {
-                let candidates = self.repository.node_candidates(snapshot_id, node_id)?;
+                let candidates = self
+                    .repository
+                    .node_candidates(snapshot_id, node_id)
+                    .await?;
                 Err(error.with_details(json!({
                     "nodeId": node_id,
                     "candidates": candidates,

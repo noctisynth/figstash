@@ -50,10 +50,11 @@ fn packaged_cli_schemas_match_the_authoritative_contracts() {
     }
 }
 
-fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary) {
+async fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary) {
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
     let store = Store::open(temporary.path())
+        .await
         .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
     let bytes = include_bytes!("../../../fixtures/figma/feature-parity.json");
     let indexed = parse_file(bytes).unwrap_or_else(|error| panic!("fixture parse failed: {error}"));
@@ -63,20 +64,17 @@ fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary
     fs::write(&stage, bytes).unwrap_or_else(|error| panic!("fixture staging failed: {error}"));
     let summary = store
         .commit_snapshot(FILE_KEY, RequestProfile::default().key(), &stage, &indexed)
+        .await
         .unwrap_or_else(|error| panic!("snapshot commit failed: {error}"));
     (temporary, store, summary)
 }
 
-fn prepared_diff_store() -> (
+async fn prepared_diff_store() -> (
     tempfile::TempDir,
     figstash_core::SnapshotSummary,
     figstash_core::SnapshotSummary,
 ) {
-    let temporary =
-        tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
-    let store = Store::open(temporary.path())
-        .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
-    let commit = |bytes: &[u8]| {
+    async fn commit(store: &Store, bytes: &[u8]) -> figstash_core::SnapshotSummary {
         let indexed =
             parse_file(bytes).unwrap_or_else(|error| panic!("diff fixture parse failed: {error}"));
         let stage = store
@@ -86,20 +84,30 @@ fn prepared_diff_store() -> (
             .unwrap_or_else(|error| panic!("diff fixture staging failed: {error}"));
         store
             .commit_snapshot(FILE_KEY, RequestProfile::default().key(), &stage, &indexed)
+            .await
             .unwrap_or_else(|error| panic!("diff snapshot commit failed: {error}"))
-    };
-    let before = commit(include_bytes!(
-        "../../../fixtures/figma/snapshot-diff-before.json"
-    ));
-    let after = commit(include_bytes!(
-        "../../../fixtures/figma/snapshot-diff-after.json"
-    ));
+    }
+    let temporary =
+        tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
+    let store = Store::open(temporary.path())
+        .await
+        .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
+    let before = commit(
+        &store,
+        include_bytes!("../../../fixtures/figma/snapshot-diff-before.json"),
+    )
+    .await;
+    let after = commit(
+        &store,
+        include_bytes!("../../../fixtures/figma/snapshot-diff-after.json"),
+    )
+    .await;
     (temporary, before, after)
 }
 
-#[test]
-fn every_core_local_command_emits_one_schema_valid_json_object() {
-    let (temporary, _store, _summary) = prepared_store();
+#[tokio::test]
+async fn every_core_local_command_emits_one_schema_valid_json_object() {
+    let (temporary, _store, _summary) = prepared_store().await;
     let cases: &[(&str, &[&str])] = &[
         (
             "context",
@@ -141,9 +149,9 @@ fn every_core_local_command_emits_one_schema_valid_json_object() {
     }
 }
 
-#[test]
-fn high_level_agent_commands_are_local_safe_and_unambiguous() {
-    let (temporary, _store, _summary) = prepared_store();
+#[tokio::test]
+async fn high_level_agent_commands_are_local_safe_and_unambiguous() {
+    let (temporary, _store, _summary) = prepared_store().await;
 
     let context = run_cli(
         temporary.path(),
@@ -215,9 +223,9 @@ fn high_level_agent_commands_are_local_safe_and_unambiguous() {
     assert_eq!(conflict["meta"]["network"]["attempts"], 0);
 }
 
-#[test]
-fn snapshot_diff_is_schema_valid_filtered_and_zero_network() {
-    let (temporary, before, after) = prepared_diff_store();
+#[tokio::test]
+async fn snapshot_diff_is_schema_valid_filtered_and_zero_network() {
+    let (temporary, before, after) = prepared_diff_store().await;
     let output = run_cli(
         temporary.path(),
         &[
@@ -287,9 +295,9 @@ fn schema_command_supports_catalog_and_detailed_contract_discovery() {
     assert_eq!(unknown["error"]["code"], "invalid_arguments");
 }
 
-#[test]
-fn compact_node_is_a_self_contained_agent_d2c_context() {
-    let (temporary, _store, _summary) = prepared_store();
+#[tokio::test]
+async fn compact_node_is_a_self_contained_agent_d2c_context() {
+    let (temporary, _store, _summary) = prepared_store().await;
     let output = run_cli(
         temporary.path(),
         &["node", "get", FILE_KEY, "--node", "2:1"],
@@ -336,9 +344,9 @@ fn argument_and_cache_miss_failures_are_json_with_stable_exit_codes() {
     );
 }
 
-#[test]
-fn one_thousand_repeated_local_queries_observe_zero_network_attempts() {
-    let (_temporary, store, summary) = prepared_store();
+#[tokio::test]
+async fn one_thousand_repeated_local_queries_observe_zero_network_attempts() {
+    let (_temporary, store, summary) = prepared_store().await;
     let service = QueryService::new(store.clone());
     for _ in 0..1_000 {
         let result = service
@@ -352,11 +360,13 @@ fn one_thousand_repeated_local_queries_observe_zero_network_attempts() {
                 depth: Some(0),
                 view: View::Compact,
             })
+            .await
             .unwrap_or_else(|error| panic!("offline query failed: {error}"));
         assert_eq!(result.node["id"], "2:2");
     }
     let quota = store
         .quota_status()
+        .await
         .unwrap_or_else(|error| panic!("quota status failed: {error}"));
     assert_eq!(quota.attempted, 0);
 }
@@ -470,9 +480,9 @@ fn offline_whoami_fails_before_credential_or_network_access() {
     assert_eq!(response["meta"]["network"]["attempts"], 0);
 }
 
-#[test]
-fn pull_policy_fails_before_auth_or_network_when_refresh_is_not_explicit() {
-    let (temporary, _store, _summary) = prepared_store();
+#[tokio::test]
+async fn pull_policy_fails_before_auth_or_network_when_refresh_is_not_explicit() {
+    let (temporary, _store, _summary) = prepared_store().await;
     let existing = run_cli(temporary.path(), &["snapshot", "pull", FILE_KEY]);
     assert_eq!(existing.status.code(), Some(6));
     let existing_json = parse_single_stdout(&existing);

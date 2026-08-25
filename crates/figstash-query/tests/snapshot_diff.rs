@@ -7,7 +7,7 @@ use std::fs;
 
 const FILE_KEY: &str = "SnapshotDiffFixture";
 
-fn commit_fixture(
+async fn commit_fixture(
     store: &Store,
     bytes: &[u8],
     profile: RequestProfile,
@@ -19,10 +19,11 @@ fn commit_fixture(
     fs::write(&stage, bytes).unwrap_or_else(|error| panic!("fixture staging failed: {error}"));
     store
         .commit_snapshot(FILE_KEY, profile.key(), &stage, &indexed)
+        .await
         .unwrap_or_else(|error| panic!("snapshot commit failed: {error}"))
 }
 
-fn prepared_diff() -> (
+async fn prepared_diff() -> (
     tempfile::TempDir,
     Store,
     figstash_core::SnapshotSummary,
@@ -31,17 +32,20 @@ fn prepared_diff() -> (
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
     let store = Store::open(temporary.path())
+        .await
         .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
     let before = commit_fixture(
         &store,
         include_bytes!("../../../fixtures/figma/snapshot-diff-before.json"),
         RequestProfile::default(),
-    );
+    )
+    .await;
     let after = commit_fixture(
         &store,
         include_bytes!("../../../fixtures/figma/snapshot-diff-after.json"),
         RequestProfile::default(),
-    );
+    )
+    .await;
     (temporary, store, before, after)
 }
 
@@ -53,9 +57,9 @@ fn selector<'a>(snapshot_id: &'a str, profile: &'a str) -> SnapshotSelector<'a> 
     }
 }
 
-#[test]
-fn classifies_nodes_and_entities_without_descendant_false_positives() {
-    let (_temporary, store, before, after) = prepared_diff();
+#[tokio::test]
+async fn classifies_nodes_and_entities_without_descendant_false_positives() {
+    let (_temporary, store, before, after) = prepared_diff().await;
     let service = QueryService::new(store);
     let result = service
         .snapshot_diff(
@@ -63,6 +67,7 @@ fn classifies_nodes_and_entities_without_descendant_false_positives() {
             selector(&after.id, RequestProfile::default().key()),
             SnapshotDiffFilters::default(),
         )
+        .await
         .unwrap_or_else(|error| panic!("snapshot diff failed: {error}"));
 
     assert_eq!(result.summary.added, 1);
@@ -98,9 +103,9 @@ fn classifies_nodes_and_entities_without_descendant_false_positives() {
     assert_eq!(result.summary.component_sets.changed, 1);
 }
 
-#[test]
-fn combines_node_type_and_path_filters_deterministically() {
-    let (_temporary, store, before, after) = prepared_diff();
+#[tokio::test]
+async fn combines_node_type_and_path_filters_deterministically() {
+    let (_temporary, store, before, after) = prepared_diff().await;
     let service = QueryService::new(store);
     let path = vec!["0:0".to_owned(), "1:2".to_owned()];
     let filters = SnapshotDiffFilters {
@@ -114,6 +119,7 @@ fn combines_node_type_and_path_filters_deterministically() {
             selector(&after.id, RequestProfile::default().key()),
             filters,
         )
+        .await
         .unwrap_or_else(|error| panic!("filtered snapshot diff failed: {error}"));
     let second = service
         .snapshot_diff(
@@ -121,6 +127,7 @@ fn combines_node_type_and_path_filters_deterministically() {
             selector(&after.id, RequestProfile::default().key()),
             filters,
         )
+        .await
         .unwrap_or_else(|error| panic!("repeated snapshot diff failed: {error}"));
 
     assert_eq!(first, second);
@@ -132,9 +139,9 @@ fn combines_node_type_and_path_filters_deterministically() {
     assert_eq!(first.summary.removed, 0);
 }
 
-#[test]
-fn rejects_snapshots_from_different_request_profiles() {
-    let (_temporary, store, before, _after) = prepared_diff();
+#[tokio::test]
+async fn rejects_snapshots_from_different_request_profiles() {
+    let (_temporary, store, before, _after) = prepared_diff().await;
     let paths_profile = RequestProfile {
         geometry: GeometryMode::Paths,
     };
@@ -142,13 +149,16 @@ fn rejects_snapshots_from_different_request_profiles() {
         &store,
         include_bytes!("../../../fixtures/figma/snapshot-diff-after.json"),
         paths_profile,
-    );
+    )
+    .await;
     let service = QueryService::new(store);
-    let result = service.snapshot_diff(
-        selector(&before.id, RequestProfile::default().key()),
-        selector(&paths.id, paths_profile.key()),
-        SnapshotDiffFilters::default(),
-    );
+    let result = service
+        .snapshot_diff(
+            selector(&before.id, RequestProfile::default().key()),
+            selector(&paths.id, paths_profile.key()),
+            SnapshotDiffFilters::default(),
+        )
+        .await;
     let Err(error) = result else {
         panic!("cross-profile snapshot diff must fail");
     };

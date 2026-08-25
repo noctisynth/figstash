@@ -442,6 +442,7 @@ where
                             plan_tier: response.rate_limit.plan_tier.clone(),
                             rate_limit_type: response.rate_limit.rate_limit_type.clone(),
                         })
+                        .await
                         .map_err(|error| with_network(error, network, endpoint))?;
                     if let Some(error) = mapped_error {
                         let retry = response.status >= 500
@@ -476,6 +477,7 @@ where
                             plan_tier: None,
                             rate_limit_type: None,
                         })
+                        .await
                         .map_err(|error| with_network(error, network, endpoint))?;
                     let retry = matches!(
                         error.kind(),
@@ -612,7 +614,8 @@ mod tests {
     struct MemoryLedger(Arc<Mutex<Vec<ApiAttempt>>>);
 
     impl AttemptRecorder for MemoryLedger {
-        fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()> {
+        #[allow(clippy::unused_async_trait_impl)]
+        async fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()> {
             self.0
                 .lock()
                 .unwrap_or_else(|error| panic!("ledger mutex poisoned: {error}"))

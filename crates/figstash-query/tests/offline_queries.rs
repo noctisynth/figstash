@@ -6,10 +6,11 @@ use figstash_store::Store;
 use serde_json::json;
 use std::fs;
 
-fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary) {
+async fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary) {
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
     let store = Store::open(temporary.path())
+        .await
         .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
     let bytes = include_bytes!("../../../fixtures/figma/feature-parity.json");
     let indexed = parse_file(bytes).unwrap_or_else(|error| panic!("fixture parse failed: {error}"));
@@ -24,13 +25,14 @@ fn prepared_store() -> (tempfile::TempDir, Store, figstash_core::SnapshotSummary
             &stage,
             &indexed,
         )
+        .await
         .unwrap_or_else(|error| panic!("snapshot commit failed: {error}"));
     (temporary, store, summary)
 }
 
-#[test]
-fn compact_raw_search_tokens_and_components_are_fully_offline() {
-    let (_temporary, store, summary) = prepared_store();
+#[tokio::test]
+async fn compact_raw_search_tokens_and_components_are_fully_offline() {
+    let (_temporary, store, summary) = prepared_store().await;
     let service = QueryService::new(store);
     let selector = || SnapshotSelector {
         file_key: "SyntheticFileKey123",
@@ -45,6 +47,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
             depth: Some(1),
             view: View::Compact,
         })
+        .await
         .unwrap_or_else(|error| panic!("compact query failed: {error}"));
     insta::assert_json_snapshot!("compact_card", compact.node);
     let references = compact
@@ -68,6 +71,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
             depth: None,
             view: View::Compact,
         })
+        .await
         .unwrap_or_else(|error| panic!("instance query failed: {error}"));
     let instance_references = instance
         .references
@@ -82,6 +86,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
             depth: None,
             view: View::Raw,
         })
+        .await
         .unwrap_or_else(|error| panic!("raw query failed: {error}"));
     assert_eq!(raw.node["futurePayload"]["preserved"], true);
     assert!(raw.references.is_none());
@@ -95,12 +100,14 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
                 ..NodeSearchQuery::default()
             },
         )
+        .await
         .unwrap_or_else(|error| panic!("text search failed: {error}"));
     assert_eq!(search.nodes.len(), 1);
     assert_eq!(search.nodes[0].node_id, "2:2");
 
     let tokens = service
         .tokens_get(selector())
+        .await
         .unwrap_or_else(|error| panic!("token query failed: {error}"));
     assert_eq!(tokens.named_styles.len(), 3);
     assert!(!tokens.global_vars.is_empty());
@@ -108,6 +115,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
 
     let components = service
         .components_list(selector())
+        .await
         .unwrap_or_else(|error| panic!("component query failed: {error}"));
     assert_eq!(components.components.len(), 1);
     assert_eq!(components.component_sets.len(), 1);
@@ -115,6 +123,7 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
 
     let outline = service
         .outline(selector(), None, 2)
+        .await
         .unwrap_or_else(|error| panic!("outline query failed: {error}"));
     assert_eq!(outline.root.id, "0:0");
     assert_eq!(outline.root.children.len(), 1);
@@ -124,8 +133,8 @@ fn compact_raw_search_tokens_and_components_are_fully_offline() {
     insta::assert_json_snapshot!("agent_outline_depth_two", outline.root);
 }
 
-#[test]
-fn all_supported_core_node_types_have_compact_golden_output() {
+#[tokio::test]
+async fn all_supported_core_node_types_have_compact_golden_output() {
     let node_types = [
         "CANVAS",
         "FRAME",
@@ -185,6 +194,7 @@ fn all_supported_core_node_types_have_compact_golden_output() {
     let temporary =
         tempfile::tempdir().unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
     let store = Store::open(temporary.path())
+        .await
         .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
     let stage = store
         .create_staging_file()
@@ -197,6 +207,7 @@ fn all_supported_core_node_types_have_compact_golden_output() {
             &stage,
             &indexed,
         )
+        .await
         .unwrap_or_else(|error| panic!("snapshot commit failed: {error}"));
     let compact = QueryService::new(store)
         .node_get(NodeGetOptions {
@@ -209,6 +220,7 @@ fn all_supported_core_node_types_have_compact_golden_output() {
             depth: Some(1),
             view: View::Compact,
         })
+        .await
         .unwrap_or_else(|error| panic!("compact query failed: {error}"));
     insta::assert_json_snapshot!("compact_core_node_types", compact.node);
 }

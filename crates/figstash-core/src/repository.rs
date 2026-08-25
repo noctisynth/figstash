@@ -6,54 +6,56 @@ use crate::{
 };
 
 /// Durable sink for locally observed Figma request attempts.
+#[allow(async_fn_in_trait)]
 pub trait AttemptRecorder: Send + Sync {
     /// Persists one completed request attempt without storing credentials or payloads.
     ///
     /// # Errors
     ///
     /// Returns a storage error when the attempt cannot be persisted durably.
-    fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()>;
+    async fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()>;
 }
 
 /// Pure-local snapshot query interface.
 ///
 /// The trait intentionally exposes no transport or network capability. Query
 /// implementations can therefore be audited structurally for offline safety.
+#[allow(async_fn_in_trait)]
 pub trait SnapshotRepository {
     /// Resolves an explicit snapshot or the current file/profile head.
     ///
     /// # Errors
     ///
     /// Returns a local-data or storage error when the snapshot cannot be resolved.
-    fn resolve_snapshot(&self, selector: SnapshotSelector<'_>) -> AppResult<SnapshotSummary>;
+    async fn resolve_snapshot(&self, selector: SnapshotSelector<'_>) -> AppResult<SnapshotSummary>;
 
     /// Loads a node and its ordered direct children.
     ///
     /// # Errors
     ///
     /// Returns `node_not_found` or a durable storage error.
-    fn load_node(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode>;
+    async fn load_node(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode>;
 
     /// Loads every indexed node in deterministic preorder.
     ///
     /// # Errors
     ///
     /// Returns a storage or integrity error when indexed nodes cannot be loaded.
-    fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>>;
+    async fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>>;
 
     /// Returns the document root node identifier.
     ///
     /// # Errors
     ///
     /// Returns a corruption or storage error when no root can be loaded.
-    fn root_node_id(&self, snapshot_id: &str) -> AppResult<String>;
+    async fn root_node_id(&self, snapshot_id: &str) -> AppResult<String>;
 
     /// Resolves an exact identifier or name to candidate nodes.
     ///
     /// # Errors
     ///
     /// Returns a storage error when the local index cannot be queried.
-    fn node_candidates(
+    async fn node_candidates(
         &self,
         snapshot_id: &str,
         identifier_or_name: &str,
@@ -64,7 +66,7 @@ pub trait SnapshotRepository {
     /// # Errors
     ///
     /// Returns an input error for an invalid cursor or a local storage error.
-    fn search_nodes(
+    async fn search_nodes(
         &self,
         snapshot_id: &str,
         query: &NodeSearchQuery,
@@ -75,26 +77,30 @@ pub trait SnapshotRepository {
     /// # Errors
     ///
     /// Returns a storage or integrity error when indexed styles cannot be loaded.
-    fn load_styles(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
+    async fn load_styles(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
 
     /// Loads indexed components.
     ///
     /// # Errors
     ///
     /// Returns a storage or integrity error when components cannot be loaded.
-    fn load_components(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
+    async fn load_components(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
 
     /// Loads indexed component sets.
     ///
     /// # Errors
     ///
     /// Returns a storage or integrity error when component sets cannot be loaded.
-    fn load_component_sets(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
+    async fn load_component_sets(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>>;
 
     /// Lists instances referencing a component.
     ///
     /// # Errors
     ///
     /// Returns a storage error when the local relation index cannot be queried.
-    fn component_usage(&self, snapshot_id: &str, component_id: &str) -> AppResult<ComponentUsage>;
+    async fn component_usage(
+        &self,
+        snapshot_id: &str,
+        component_id: &str,
+    ) -> AppResult<ComponentUsage>;
 }

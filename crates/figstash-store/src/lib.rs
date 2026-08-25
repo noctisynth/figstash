@@ -3,5 +3,6 @@
 mod blob;
 mod catalog;
 mod error;
+mod models;
 
 pub use catalog::{PrunePlan, QuotaBucket, QuotaStatus, RecentRateLimit, Store, WriterLock};

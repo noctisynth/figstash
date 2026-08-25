@@ -2,6 +2,10 @@
 
 use crate::blob::BlobStore;
 use crate::error::{corrupt_error, io_error, sql_error};
+use crate::models::{
+    ApiAttemptRow, ComponentRow, ComponentSetRow, DerivedArtifactRow, HeadRow, NodeRow,
+    SchemaMigrationRow, SnapshotRow, StyleRow,
+};
 use chrono::{DateTime, Datelike, Utc};
 use figstash_core::{
     ApiAttempt, AppError, AppResult, AttemptRecorder, BoundingBox, ComponentUsage, EndpointClass,
@@ -10,12 +14,12 @@ use figstash_core::{
     StoredNode, Tier,
 };
 use fs2::FileExt;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::json;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use toasty::{Db, Executor, stmt::Query};
 use uuid::Uuid;
 
 const STORE_VERSION: &str = "store-v1";
@@ -123,6 +127,7 @@ pub struct Store {
     root: PathBuf,
     catalog_path: PathBuf,
     blobs: BlobStore,
+    db: Db,
 }
 
 /// Held exclusive writer lock for one file/request-profile lineage.
@@ -213,7 +218,7 @@ impl Store {
     /// # Errors
     ///
     /// Returns a storage or migration-integrity error when initialization fails.
-    pub fn open(data_directory: impl AsRef<Path>) -> AppResult<Self> {
+    pub async fn open(data_directory: impl AsRef<Path>) -> AppResult<Self> {
         let root = data_directory.as_ref().join(STORE_VERSION);
         for directory in [
             root.clone(),
@@ -228,13 +233,33 @@ impl Store {
             restrict_directory(&directory)?;
         }
         let catalog_path = root.join("catalog.sqlite3");
+        let mut builder = Db::builder();
+        builder
+            .models(toasty::models!(
+                SnapshotRow,
+                HeadRow,
+                NodeRow,
+                StyleRow,
+                ComponentRow,
+                ComponentSetRow,
+                DerivedArtifactRow,
+                ApiAttemptRow,
+                SchemaMigrationRow
+            ))
+            .max_pool_size(1);
+        let database_url = format!("sqlite:{}", catalog_path.display());
+        let db = builder
+            .connect(&database_url)
+            .await
+            .map_err(|error| sql_error("Failed to open the snapshot catalog.", error))?;
         let store = Self {
             blobs: BlobStore::new(root.join("blobs")),
             root,
             catalog_path,
+            db,
         };
-        store.initialize_catalog()?;
-        store.cleanup_orphan_staging(Duration::from_secs(24 * 60 * 60))?;
+        store.initialize_catalog().await?;
+        store.cleanup_orphan_staging(Duration::from_hours(24))?;
         Ok(store)
     }
 
@@ -301,7 +326,7 @@ impl Store {
     /// # Errors
     ///
     /// Returns an integrity or storage error. A failed transaction never moves `HEAD`.
-    pub fn commit_snapshot(
+    pub async fn commit_snapshot(
         &self,
         file_key: &str,
         request_profile: &str,
@@ -333,20 +358,26 @@ impl Store {
             is_head: true,
         };
 
-        let mut connection = self.connection()?;
-        let transaction = connection
+        let mut db = self.db.clone();
+        let mut transaction = db
             .transaction()
+            .await
             .map_err(|error| sql_error("Failed to start the snapshot transaction.", error))?;
-        self.insert_snapshot(&transaction, &summary, indexed)?;
-        transaction
-            .execute(
-                "INSERT INTO heads(file_key, request_profile, snapshot_id) VALUES(?1, ?2, ?3)
-                 ON CONFLICT(file_key, request_profile) DO UPDATE SET snapshot_id=excluded.snapshot_id",
-                params![file_key, request_profile, summary.id],
-            )
-            .map_err(|error| sql_error("Failed to advance the snapshot HEAD.", error))?;
+        self.insert_snapshot(&mut transaction, &summary, indexed)
+            .await?;
+        toasty::sql::statement(
+            "INSERT INTO heads(file_key, request_profile, snapshot_id) VALUES(?1, ?2, ?3)
+             ON CONFLICT(file_key, request_profile) DO UPDATE SET snapshot_id=excluded.snapshot_id",
+        )
+        .bind(file_key)
+        .bind(request_profile)
+        .bind(summary.id.as_str())
+        .exec(&mut transaction)
+        .await
+        .map_err(|error| sql_error("Failed to advance the snapshot HEAD.", error))?;
         transaction
             .commit()
+            .await
             .map_err(|error| sql_error("Failed to commit the snapshot transaction.", error))?;
         let _ = fs::remove_file(staged_response);
         self.resolve_snapshot(SnapshotSelector {
@@ -354,6 +385,7 @@ impl Store {
             request_profile,
             snapshot_id: Some(&summary.id),
         })
+        .await
     }
 
     /// Lists immutable snapshots newest first.
@@ -361,23 +393,33 @@ impl Store {
     /// # Errors
     ///
     /// Returns a storage or integrity error when catalog rows cannot be loaded.
-    pub fn list_snapshots(&self, file_key: Option<&str>) -> AppResult<Vec<SnapshotSummary>> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT s.id,s.file_key,s.figma_version,s.request_profile,s.file_name,
-                        s.fetched_at,s.last_modified,s.raw_blob_hash,s.raw_size,s.node_count,
-                        s.parser_version,
-                        EXISTS(SELECT 1 FROM heads h WHERE h.snapshot_id=s.id)
-                 FROM snapshots s
-                 WHERE (?1 IS NULL OR s.file_key=?1)
-                 ORDER BY s.fetched_at DESC, s.id",
-            )
-            .map_err(|error| sql_error("Failed to prepare snapshot listing.", error))?;
-        let rows = statement
-            .query_map(params![file_key], snapshot_from_row)
+    pub async fn list_snapshots(&self, file_key: Option<&str>) -> AppResult<Vec<SnapshotSummary>> {
+        let mut query = Query::<toasty::stmt::List<SnapshotRow>>::all();
+        if let Some(file_key) = file_key {
+            query = query.filter(SnapshotRow::fields().file_key().eq(file_key));
+        }
+        let mut db = self.db.clone();
+        let rows = query
+            .order_by((
+                SnapshotRow::fields().fetched_at().desc(),
+                SnapshotRow::fields().id().asc(),
+            ))
+            .exec(&mut db)
+            .await
             .map_err(|error| sql_error("Failed to list snapshots.", error))?;
-        collect_rows(rows, "Failed to decode snapshot metadata.")
+        let heads = Query::<toasty::stmt::List<HeadRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load snapshot heads.", error))?
+            .into_iter()
+            .map(|head| head.snapshot_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        rows.into_iter()
+            .map(|row| {
+                let is_head = heads.contains(&row.id);
+                snapshot_from_model(row, is_head)
+            })
+            .collect()
     }
 
     /// Creates a safe plan retaining every current HEAD and every lineage's sole snapshot.
@@ -385,33 +427,47 @@ impl Store {
     /// # Errors
     ///
     /// Returns a storage error when reachability cannot be calculated.
-    pub fn prune_plan(&self) -> AppResult<PrunePlan> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT s.id FROM snapshots s
-                 WHERE NOT EXISTS(SELECT 1 FROM heads h WHERE h.snapshot_id=s.id)
-                   AND EXISTS(
-                     SELECT 1 FROM snapshots newer
-                     WHERE newer.file_key=s.file_key AND newer.request_profile=s.request_profile
-                       AND newer.id<>s.id
-                   )
-                 ORDER BY s.fetched_at, s.id",
-            )
-            .map_err(|error| sql_error("Failed to prepare the prune plan.", error))?;
-        let snapshot_ids = collect_rows(
-            statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|error| sql_error("Failed to build the prune plan.", error))?,
-            "Failed to decode a prune candidate.",
-        )?;
-        let blob_hashes = Self::unreferenced_after(&connection, &snapshot_ids)?;
-        let retained_snapshots = connection
-            .query_row("SELECT COUNT(*) FROM snapshots", [], |row| {
-                nonnegative_integer(row, 0)
+    pub async fn prune_plan(&self) -> AppResult<PrunePlan> {
+        let mut db = self.db.clone();
+        let mut snapshots = Query::<toasty::stmt::List<SnapshotRow>>::all()
+            .order_by((
+                SnapshotRow::fields().fetched_at().asc(),
+                SnapshotRow::fields().id().asc(),
+            ))
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to build the prune plan.", error))?;
+        let heads = Query::<toasty::stmt::List<HeadRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load snapshot heads.", error))?
+            .into_iter()
+            .map(|head| head.snapshot_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut lineage_counts = std::collections::BTreeMap::new();
+        for snapshot in &snapshots {
+            *lineage_counts
+                .entry((snapshot.file_key.clone(), snapshot.request_profile.clone()))
+                .or_insert(0_usize) += 1;
+        }
+        let snapshot_ids = snapshots
+            .drain(..)
+            .filter(|snapshot| {
+                !heads.contains(&snapshot.id)
+                    && lineage_counts
+                        .get(&(snapshot.file_key.clone(), snapshot.request_profile.clone()))
+                        .is_some_and(|count| *count > 1)
             })
-            .map_err(|error| sql_error("Failed to count retained snapshots.", error))?
-            .saturating_sub(u64::try_from(snapshot_ids.len()).unwrap_or(u64::MAX));
+            .map(|snapshot| snapshot.id)
+            .collect::<Vec<_>>();
+        let blob_hashes = self.unreferenced_after(&snapshot_ids).await?;
+        let total = Query::<toasty::stmt::List<SnapshotRow>>::all()
+            .count()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to count retained snapshots.", error))?;
+        let retained_snapshots =
+            total.saturating_sub(u64::try_from(snapshot_ids.len()).unwrap_or(u64::MAX));
         Ok(PrunePlan {
             snapshot_ids,
             blob_hashes,
@@ -426,22 +482,29 @@ impl Store {
     /// # Errors
     ///
     /// Returns a storage error if the catalog transaction or blob collection fails.
-    pub fn execute_prune(&self) -> AppResult<PrunePlan> {
-        let mut plan = self.prune_plan()?;
-        let mut connection = self.connection()?;
-        let transaction = connection
+    pub async fn execute_prune(&self) -> AppResult<PrunePlan> {
+        let mut plan = self.prune_plan().await?;
+        let mut db = self.db.clone();
+        let mut transaction = db
             .transaction()
+            .await
             .map_err(|error| sql_error("Failed to start the prune transaction.", error))?;
         for snapshot_id in &plan.snapshot_ids {
-            transaction
-                .execute("DELETE FROM node_fts WHERE snapshot_id=?1", [snapshot_id])
+            toasty::sql::statement("DELETE FROM node_fts WHERE snapshot_id=?1")
+                .bind(snapshot_id.as_str())
+                .exec(&mut transaction)
+                .await
                 .map_err(|error| sql_error("Failed to prune node search rows.", error))?;
-            transaction
-                .execute("DELETE FROM snapshots WHERE id=?1", [snapshot_id])
+            Query::<toasty::stmt::List<SnapshotRow>>::all()
+                .filter(SnapshotRow::fields().id().eq(snapshot_id.as_str()))
+                .delete()
+                .exec(&mut transaction)
+                .await
                 .map_err(|error| sql_error("Failed to prune a snapshot.", error))?;
         }
         transaction
             .commit()
+            .await
             .map_err(|error| sql_error("Failed to commit the prune transaction.", error))?;
         for hash in &plan.blob_hashes {
             let path = self.blobs.path(hash);
@@ -460,29 +523,44 @@ impl Store {
     /// # Errors
     ///
     /// Returns a storage error when the local request ledger cannot be summarized.
-    pub fn quota_status(&self) -> AppResult<QuotaStatus> {
-        let connection = self.connection()?;
+    pub async fn quota_status(&self) -> AppResult<QuotaStatus> {
         let now = Utc::now();
         let month = format!("{:04}-{:02}", now.year(), now.month());
-        let prefix = format!("{month}%");
-        let (attempted, succeeded) = connection
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN http_status BETWEEN 200 AND 299 THEN 1 ELSE 0 END),0)
-                 FROM api_attempts WHERE completed_at LIKE ?1",
-                [&prefix],
-                |row| Ok((nonnegative_integer(row, 0)?, nonnegative_integer(row, 1)?)),
-            )
+        let mut db = self.db.clone();
+        let attempts = Query::<toasty::stmt::List<ApiAttemptRow>>::all()
+            .filter(ApiAttemptRow::fields().completed_at().starts_with(&month))
+            .exec(&mut db)
+            .await
             .map_err(|error| sql_error("Failed to summarize the request ledger.", error))?;
+        let attempted = u64::try_from(attempts.len())
+            .map_err(|error| corrupt_error("The request count cannot be represented.", error))?;
+        let succeeded = u64::try_from(
+            attempts
+                .iter()
+                .filter(|attempt| {
+                    attempt
+                        .http_status
+                        .is_some_and(|status| (200..=299).contains(&status))
+                })
+                .count(),
+        )
+        .map_err(|error| {
+            corrupt_error("The successful request count cannot be represented.", error)
+        })?;
         Ok(QuotaStatus {
             scope: "figstash_observed_only".to_owned(),
             month,
             attempted,
             succeeded,
-            by_tier: grouped_attempts(&connection, "tier", &prefix)?,
-            by_endpoint: grouped_attempts(&connection, "endpoint_class", &prefix)?,
-            by_command: grouped_attempts(&connection, "command", &prefix)?,
-            by_file: grouped_attempts(&connection, "COALESCE(file_key, 'none')", &prefix)?,
-            recent_rate_limit: latest_rate_limit(&connection)?,
+            by_tier: grouped_attempt_models(&attempts, |attempt| attempt.tier.as_str())?,
+            by_endpoint: grouped_attempt_models(&attempts, |attempt| {
+                attempt.endpoint_class.as_str()
+            })?,
+            by_command: grouped_attempt_models(&attempts, |attempt| attempt.command.as_str())?,
+            by_file: grouped_attempt_models(&attempts, |attempt| {
+                attempt.file_key.as_deref().unwrap_or("none")
+            })?,
+            recent_rate_limit: latest_rate_limit_model(&attempts)?,
             policy_source: "https://developers.figma.com/docs/rest-api/rate-limits/".to_owned(),
             policy_updated_at: "2026-08-20".to_owned(),
         })
@@ -509,20 +587,52 @@ impl Store {
         Ok(destination)
     }
 
-    fn initialize_catalog(&self) -> AppResult<()> {
-        let connection = self.connection()?;
-        connection
-            .execute_batch(MIGRATION_SQL)
-            .map_err(|error| sql_error("Failed to initialize the snapshot catalog.", error))?;
+    async fn initialize_catalog(&self) -> AppResult<()> {
+        let mut connection = self
+            .db
+            .connection()
+            .await
+            .map_err(|error| sql_error("Failed to acquire the snapshot catalog.", error))?;
+        for pragma in [
+            "PRAGMA foreign_keys=ON",
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=FULL",
+            "PRAGMA busy_timeout=5000",
+        ] {
+            toasty::sql::query(pragma)
+                .exec(&mut connection)
+                .await
+                .map_err(|error| sql_error("Failed to configure the snapshot catalog.", error))?;
+        }
+        let migration_table_exists = !toasty::sql::query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'",
+        )
+        .exec(&mut connection)
+        .await
+        .map_err(|error| sql_error("Failed to inspect catalog migrations.", error))?
+        .is_empty();
         let checksum = blake3::hash(MIGRATION_SQL.as_bytes()).to_hex().to_string();
-        let existing = connection
-            .query_row(
-                "SELECT checksum FROM schema_migrations WHERE version=?1",
-                [MIGRATION_VERSION],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| sql_error("Failed to inspect catalog migrations.", error))?;
+        let existing = if migration_table_exists {
+            let migrations = Query::<toasty::stmt::List<SchemaMigrationRow>>::all()
+                .exec(&mut connection)
+                .await
+                .map_err(|error| sql_error("Failed to inspect catalog migrations.", error))?;
+            if let Some(future) = migrations
+                .iter()
+                .find(|migration| migration.version > MIGRATION_VERSION)
+            {
+                return Err(corrupt_error(
+                    "The catalog schema is newer than this Figstash binary.",
+                    format!("unknown migration version {}", future.version),
+                ));
+            }
+            migrations
+                .into_iter()
+                .find(|migration| migration.version == MIGRATION_VERSION)
+                .map(|migration| migration.checksum)
+        } else {
+            None
+        };
         if let Some(existing) = existing {
             if existing != checksum {
                 return Err(corrupt_error(
@@ -531,30 +641,43 @@ impl Store {
                 ));
             }
         } else {
-            connection
-                .execute(
-                    "INSERT INTO schema_migrations(version,applied_at,checksum) VALUES(?1,?2,?3)",
-                    params![MIGRATION_VERSION, Utc::now().to_rfc3339(), checksum],
-                )
-                .map_err(|error| sql_error("Failed to record the catalog migration.", error))?;
+            drop(connection);
+            let mut db = self.db.clone();
+            let mut transaction = db
+                .transaction()
+                .await
+                .map_err(|error| sql_error("Failed to start the catalog migration.", error))?;
+            for statement in MIGRATION_SQL
+                .split(';')
+                .map(str::trim)
+                .filter(|sql| !sql.is_empty())
+            {
+                toasty::sql::statement(statement)
+                    .exec(&mut transaction)
+                    .await
+                    .map_err(|error| {
+                        sql_error("Failed to initialize the snapshot catalog.", error)
+                    })?;
+            }
+            toasty::create!(SchemaMigrationRow {
+                version: MIGRATION_VERSION,
+                applied_at: Utc::now().to_rfc3339(),
+                checksum,
+            })
+            .exec(&mut transaction)
+            .await
+            .map_err(|error| sql_error("Failed to record the catalog migration.", error))?;
+            transaction
+                .commit()
+                .await
+                .map_err(|error| sql_error("Failed to commit the catalog migration.", error))?;
         }
         restrict_file(&self.catalog_path)
     }
 
-    fn connection(&self) -> AppResult<Connection> {
-        let connection = Connection::open(&self.catalog_path)
-            .map_err(|error| sql_error("Failed to open the snapshot catalog.", error))?;
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;",
-            )
-            .map_err(|error| sql_error("Failed to configure the snapshot catalog.", error))?;
-        Ok(connection)
-    }
-
-    fn insert_snapshot(
+    async fn insert_snapshot(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut dyn Executor,
         summary: &SnapshotSummary,
         indexed: &IndexedSnapshot,
     ) -> AppResult<()> {
@@ -564,54 +687,60 @@ impl Store {
         let node_count = i64::try_from(summary.node_count).map_err(|error| {
             corrupt_error("The node count exceeds SQLite integer range.", error)
         })?;
-        transaction
-            .execute(
-                "INSERT OR IGNORE INTO snapshots(
-                  id,file_key,figma_version,request_profile,file_name,fetched_at,last_modified,
-                  raw_blob_hash,raw_size,node_count,parser_version,status
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'ready')",
-                params![
-                    summary.id,
-                    summary.file_key,
-                    summary.figma_version,
-                    summary.request_profile,
-                    summary.file_name,
-                    summary.fetched_at.to_rfc3339(),
-                    summary.last_modified,
-                    summary.raw_blob_hash,
-                    raw_size,
-                    node_count,
-                    summary.parser_version,
-                ],
-            )
+        let existing = Query::<toasty::stmt::List<SnapshotRow>>::all()
+            .filter(SnapshotRow::fields().id().eq(summary.id.as_str()))
+            .first()
+            .exec(transaction)
+            .await
+            .map_err(|error| sql_error("Failed to inspect snapshot metadata.", error))?;
+        if existing.is_none() {
+            toasty::create!(SnapshotRow {
+                id: summary.id.clone(),
+                file_key: summary.file_key.clone(),
+                figma_version: summary.figma_version.clone(),
+                request_profile: summary.request_profile.clone(),
+                file_name: summary.file_name.clone(),
+                fetched_at: summary.fetched_at.to_rfc3339(),
+                last_modified: summary.last_modified.clone(),
+                raw_blob_hash: summary.raw_blob_hash.clone(),
+                raw_size,
+                node_count,
+                parser_version: i64::from(summary.parser_version),
+                status: "ready".to_owned(),
+            })
+            .exec(transaction)
+            .await
             .map_err(|error| sql_error("Failed to insert snapshot metadata.", error))?;
-        let already_indexed: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM nodes WHERE snapshot_id=?1)",
-                [&summary.id],
-                |row| row.get(0),
-            )
+        }
+        let already_indexed = Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(NodeRow::fields().snapshot_id().eq(summary.id.as_str()))
+            .count()
+            .exec(transaction)
+            .await
             .map_err(|error| sql_error("Failed to inspect existing snapshot indexes.", error))?;
-        if already_indexed {
+        if already_indexed > 0 {
             return Ok(());
         }
         for node in &indexed.nodes {
-            self.insert_node(transaction, &summary.id, node)?;
+            self.insert_node(transaction, &summary.id, node).await?;
         }
-        self.insert_entities(transaction, "styles", &summary.id, &indexed.styles)?;
-        self.insert_entities(transaction, "components", &summary.id, &indexed.components)?;
+        self.insert_entities(transaction, "styles", &summary.id, &indexed.styles)
+            .await?;
+        self.insert_entities(transaction, "components", &summary.id, &indexed.components)
+            .await?;
         self.insert_entities(
             transaction,
             "component_sets",
             &summary.id,
             &indexed.component_sets,
-        )?;
+        )
+        .await?;
         Ok(())
     }
 
-    fn insert_node(
+    async fn insert_node(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut dyn Executor,
         snapshot_id: &str,
         node: &IndexedNode,
     ) -> AppResult<()> {
@@ -627,89 +756,102 @@ impl Store {
             height: 0.0,
         });
         let has_bounds = node.bounds.is_some();
-        transaction
-            .execute(
-                "INSERT INTO nodes(
-                  snapshot_id,node_id,parent_id,node_type,name,depth,sibling_order,path_ids,
-                  visible,x,y,width,height,component_id,text_content,node_blob_hash,subtree_hash
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
-                params![
-                    snapshot_id,
-                    node.node_id,
-                    node.parent_id,
-                    node.node_type,
-                    node.name,
-                    node.depth,
-                    node.sibling_order,
-                    path_ids,
-                    node.visible,
-                    has_bounds.then_some(bounds.x),
-                    has_bounds.then_some(bounds.y),
-                    has_bounds.then_some(bounds.width),
-                    has_bounds.then_some(bounds.height),
-                    node.component_id,
-                    node.text_content,
-                    blob_hash,
-                    node.subtree_hash,
-                ],
-            )
-            .map_err(|error| sql_error("Failed to insert a node index row.", error))?;
-        transaction
-            .execute(
-                "INSERT INTO node_fts(snapshot_id,node_id,name,text_content) VALUES(?1,?2,?3,?4)",
-                params![snapshot_id, node.node_id, node.name, node.text_content],
-            )
+        toasty::create!(NodeRow {
+            snapshot_id: snapshot_id.to_owned(),
+            node_id: node.node_id.clone(),
+            parent_id: node.parent_id.clone(),
+            node_type: node.node_type.clone(),
+            name: node.name.clone(),
+            depth: i64::from(node.depth),
+            sibling_order: i64::from(node.sibling_order),
+            path_ids,
+            visible: node.visible,
+            x: has_bounds.then_some(bounds.x),
+            y: has_bounds.then_some(bounds.y),
+            width: has_bounds.then_some(bounds.width),
+            height: has_bounds.then_some(bounds.height),
+            component_id: node.component_id.clone(),
+            text_content: node.text_content.clone(),
+            node_blob_hash: blob_hash,
+            subtree_hash: node.subtree_hash.clone(),
+        })
+        .exec(transaction)
+        .await
+        .map_err(|error| sql_error("Failed to insert a node index row.", error))?;
+        let mut statement = toasty::sql::statement(
+            "INSERT INTO node_fts(snapshot_id,node_id,name,text_content) VALUES(?1,?2,?3,?4)",
+        )
+        .bind(snapshot_id)
+        .bind(node.node_id.as_str())
+        .bind(node.name.as_str());
+        statement = match node.text_content.as_deref() {
+            Some(text) => statement.bind(text),
+            None => statement.bind_typed(toasty::stmt::Value::Null, toasty::schema::db::Type::Text),
+        };
+        statement
+            .exec(transaction)
+            .await
             .map_err(|error| sql_error("Failed to insert a node search row.", error))?;
         Ok(())
     }
 
-    fn insert_entities(
+    async fn insert_entities(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut dyn Executor,
         table: &str,
         snapshot_id: &str,
         entities: &[IndexedEntity],
     ) -> AppResult<()> {
-        let (id_column, type_column) = match table {
-            "styles" => ("style_id", Some("style_type")),
-            "components" => ("component_id", None),
-            "component_sets" => ("component_set_id", None),
-            _ => {
-                return Err(AppError::new(
-                    ErrorCode::Internal,
-                    "An unknown entity table was selected.",
-                ));
-            }
-        };
         for entity in entities {
             let raw = serde_json::to_vec(&entity.raw)
                 .map_err(|error| corrupt_error("Failed to serialize an indexed entity.", error))?;
             let blob_hash = self.blobs.put_bytes(&raw)?;
-            let sql = if let Some(type_column) = type_column {
-                format!(
-                    "INSERT INTO {table}(snapshot_id,{id_column},{type_column},name,json_blob_hash) VALUES(?1,?2,?3,?4,?5)"
-                )
-            } else {
-                format!(
-                    "INSERT INTO {table}(snapshot_id,{id_column},node_id,name,json_blob_hash) VALUES(?1,?2,?3,?4,?5)"
-                )
-            };
-            transaction
-                .execute(
-                    &sql,
-                    params![
-                        snapshot_id,
-                        entity.id,
-                        if type_column.is_some() {
-                            Some(entity.entity_type.as_str())
-                        } else {
-                            entity.node_id.as_deref()
-                        },
-                        entity.name,
-                        blob_hash,
-                    ],
-                )
-                .map_err(|error| sql_error("Failed to insert an indexed entity.", error))?;
+            match table {
+                "styles" => {
+                    toasty::create!(StyleRow {
+                        snapshot_id: snapshot_id.to_owned(),
+                        style_id: entity.id.clone(),
+                        style_type: entity.entity_type.clone(),
+                        name: entity.name.clone(),
+                        json_blob_hash: blob_hash,
+                    })
+                    .exec(transaction)
+                    .await
+                    .map_err(|error| sql_error("Failed to insert an indexed style.", error))?;
+                }
+                "components" => {
+                    toasty::create!(ComponentRow {
+                        snapshot_id: snapshot_id.to_owned(),
+                        component_id: entity.id.clone(),
+                        node_id: entity.node_id.clone(),
+                        name: entity.name.clone(),
+                        json_blob_hash: blob_hash,
+                    })
+                    .exec(transaction)
+                    .await
+                    .map_err(|error| sql_error("Failed to insert an indexed component.", error))?;
+                }
+                "component_sets" => {
+                    toasty::create!(ComponentSetRow {
+                        snapshot_id: snapshot_id.to_owned(),
+                        component_set_id: entity.id.clone(),
+                        node_id: entity.node_id.clone(),
+                        name: entity.name.clone(),
+                        json_blob_hash: blob_hash,
+                    })
+                    .exec(transaction)
+                    .await
+                    .map_err(|error| {
+                        sql_error("Failed to insert an indexed component set.", error)
+                    })?;
+                }
+                _ => {
+                    return Err(AppError::new(
+                        ErrorCode::Internal,
+                        "An unknown entity table was selected.",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -739,130 +881,150 @@ impl Store {
         Ok(())
     }
 
-    fn unreferenced_after(
-        connection: &Connection,
-        removed_snapshots: &[String],
-    ) -> AppResult<Vec<String>> {
+    async fn unreferenced_after(&self, removed_snapshots: &[String]) -> AppResult<Vec<String>> {
         if removed_snapshots.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = connection
-            .prepare(
-                "SELECT raw_blob_hash FROM snapshots
-                 UNION SELECT node_blob_hash FROM nodes
-                 UNION SELECT json_blob_hash FROM styles
-                 UNION SELECT json_blob_hash FROM components
-                 UNION SELECT json_blob_hash FROM component_sets
-                 UNION SELECT blob_hash FROM derived_artifacts",
-            )
-            .map_err(|error| sql_error("Failed to inspect blob references.", error))?;
-        let all_hashes: Vec<String> = collect_rows(
-            statement
-                .query_map([], |row| row.get(0))
-                .map_err(|error| sql_error("Failed to inspect blob references.", error))?,
-            "Failed to decode a blob reference.",
-        )?;
-        let mut candidates = Vec::new();
-        for hash in all_hashes {
-            let referenced_by_retained: bool = connection
-                .query_row(
-                    "SELECT
-                       EXISTS(SELECT 1 FROM snapshots WHERE raw_blob_hash=?1 AND id NOT IN (SELECT value FROM json_each(?2)))
-                       OR EXISTS(SELECT 1 FROM nodes WHERE node_blob_hash=?1 AND snapshot_id NOT IN (SELECT value FROM json_each(?2)))
-                       OR EXISTS(SELECT 1 FROM styles WHERE json_blob_hash=?1 AND snapshot_id NOT IN (SELECT value FROM json_each(?2)))
-                       OR EXISTS(SELECT 1 FROM components WHERE json_blob_hash=?1 AND snapshot_id NOT IN (SELECT value FROM json_each(?2)))
-                       OR EXISTS(SELECT 1 FROM component_sets WHERE json_blob_hash=?1 AND snapshot_id NOT IN (SELECT value FROM json_each(?2)))
-                       OR EXISTS(SELECT 1 FROM derived_artifacts WHERE blob_hash=?1 AND snapshot_id NOT IN (SELECT value FROM json_each(?2)))",
-                    params![hash, serde_json::to_string(removed_snapshots).map_err(|error| corrupt_error("Failed to serialize prune candidates.", error))?],
-                    |row| row.get(0),
-                )
-                .map_err(|error| sql_error("Failed to calculate blob reachability.", error))?;
-            if !referenced_by_retained {
-                candidates.push(hash);
+        let removed = removed_snapshots
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut candidates = std::collections::BTreeSet::new();
+        let mut retained = std::collections::BTreeSet::new();
+        let mut db = self.db.clone();
+
+        for row in Query::<toasty::stmt::List<SnapshotRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect snapshot blob references.", error))?
+        {
+            if removed.contains(row.id.as_str()) {
+                candidates.insert(row.raw_blob_hash);
+            } else {
+                retained.insert(row.raw_blob_hash);
             }
         }
-        candidates.sort();
-        candidates.dedup();
-        Ok(candidates)
+        for row in Query::<toasty::stmt::List<NodeRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect node blob references.", error))?
+        {
+            if removed.contains(row.snapshot_id.as_str()) {
+                candidates.insert(row.node_blob_hash);
+            } else {
+                retained.insert(row.node_blob_hash);
+            }
+        }
+        for row in Query::<toasty::stmt::List<StyleRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect style blob references.", error))?
+        {
+            if removed.contains(row.snapshot_id.as_str()) {
+                candidates.insert(row.json_blob_hash);
+            } else {
+                retained.insert(row.json_blob_hash);
+            }
+        }
+        for row in Query::<toasty::stmt::List<ComponentRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect component blob references.", error))?
+        {
+            if removed.contains(row.snapshot_id.as_str()) {
+                candidates.insert(row.json_blob_hash);
+            } else {
+                retained.insert(row.json_blob_hash);
+            }
+        }
+        for row in Query::<toasty::stmt::List<ComponentSetRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect component-set blob references.", error))?
+        {
+            if removed.contains(row.snapshot_id.as_str()) {
+                candidates.insert(row.json_blob_hash);
+            } else {
+                retained.insert(row.json_blob_hash);
+            }
+        }
+        for row in Query::<toasty::stmt::List<DerivedArtifactRow>>::all()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to inspect derived blob references.", error))?
+        {
+            if removed.contains(row.snapshot_id.as_str()) {
+                candidates.insert(row.blob_hash);
+            } else {
+                retained.insert(row.blob_hash);
+            }
+        }
+        Ok(candidates.difference(&retained).cloned().collect())
     }
 }
 
 impl SnapshotRepository for Store {
-    fn resolve_snapshot(&self, selector: SnapshotSelector<'_>) -> AppResult<SnapshotSummary> {
-        let connection = self.connection()?;
-        let sql = if selector.snapshot_id.is_some() {
-            "SELECT s.id,s.file_key,s.figma_version,s.request_profile,s.file_name,
-                    s.fetched_at,s.last_modified,s.raw_blob_hash,s.raw_size,s.node_count,
-                    s.parser_version,EXISTS(SELECT 1 FROM heads h WHERE h.snapshot_id=s.id)
-             FROM snapshots s WHERE s.id=?3 AND s.file_key=?1 AND s.request_profile=?2"
+    async fn resolve_snapshot(&self, selector: SnapshotSelector<'_>) -> AppResult<SnapshotSummary> {
+        let mut db = self.db.clone();
+        let (snapshot_id, is_head) = if let Some(snapshot_id) = selector.snapshot_id {
+            let is_head = Query::<toasty::stmt::List<HeadRow>>::all()
+                .filter(HeadRow::fields().snapshot_id().eq(snapshot_id))
+                .count()
+                .exec(&mut db)
+                .await
+                .map_err(|error| sql_error("Failed to inspect snapshot heads.", error))?
+                > 0;
+            (snapshot_id.to_owned(), is_head)
         } else {
-            "SELECT s.id,s.file_key,s.figma_version,s.request_profile,s.file_name,
-                    s.fetched_at,s.last_modified,s.raw_blob_hash,s.raw_size,s.node_count,
-                    s.parser_version,1
-             FROM heads h JOIN snapshots s ON s.id=h.snapshot_id
-             WHERE h.file_key=?1 AND h.request_profile=?2 AND ?3 IS NULL"
-        };
-        connection
-            .query_row(
-                sql,
-                params![
-                    selector.file_key,
-                    selector.request_profile,
-                    selector.snapshot_id
-                ],
-                snapshot_from_row,
-            )
-            .optional()
-            .map_err(|error| sql_error("Failed to resolve a snapshot.", error))?
-            .ok_or_else(|| {
-                let code = if selector.snapshot_id.is_some() {
-                    ErrorCode::SnapshotNotFound
-                } else {
-                    ErrorCode::SnapshotMissing
-                };
-                AppError::new(
-                    code,
-                    "No local snapshot matches this file and request profile.",
+            let head = Query::<toasty::stmt::List<HeadRow>>::all()
+                .filter(
+                    HeadRow::fields().file_key().eq(selector.file_key).and(
+                        HeadRow::fields()
+                            .request_profile()
+                            .eq(selector.request_profile),
+                    ),
                 )
-                .with_details(json!({
-                    "fileKey": selector.file_key,
-                    "requestProfile": selector.request_profile,
-                    "snapshotId": selector.snapshot_id,
-                    "suggestedCommand": format!("figstash snapshot pull {}", selector.file_key),
-                }))
-            })
+                .first()
+                .exec(&mut db)
+                .await
+                .map_err(|error| sql_error("Failed to resolve the snapshot head.", error))?;
+            match head {
+                Some(head) => (head.snapshot_id, true),
+                None => return Err(snapshot_missing_error(selector)),
+            }
+        };
+        let row = Query::<toasty::stmt::List<SnapshotRow>>::all()
+            .filter(
+                SnapshotRow::fields()
+                    .id()
+                    .eq(snapshot_id)
+                    .and(SnapshotRow::fields().file_key().eq(selector.file_key))
+                    .and(
+                        SnapshotRow::fields()
+                            .request_profile()
+                            .eq(selector.request_profile),
+                    ),
+            )
+            .first()
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to resolve a snapshot.", error))?
+            .ok_or_else(|| snapshot_missing_error(selector))?;
+        snapshot_from_model(row, is_head)
     }
 
-    fn load_node(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode> {
-        let connection = self.connection()?;
-        let row = connection
-            .query_row(
-                "SELECT node_id,parent_id,node_type,name,depth,sibling_order,path_ids,visible,
-                        x,y,width,height,component_id,text_content,node_blob_hash,subtree_hash
-                 FROM nodes WHERE snapshot_id=?1 AND node_id=?2",
-                params![snapshot_id, node_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, u32>(4)?,
-                        row.get::<_, u32>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, Option<bool>>(7)?,
-                        row.get::<_, Option<f64>>(8)?,
-                        row.get::<_, Option<f64>>(9)?,
-                        row.get::<_, Option<f64>>(10)?,
-                        row.get::<_, Option<f64>>(11)?,
-                        row.get::<_, Option<String>>(12)?,
-                        row.get::<_, Option<String>>(13)?,
-                        row.get::<_, String>(14)?,
-                        row.get::<_, String>(15)?,
-                    ))
-                },
+    async fn load_node(&self, snapshot_id: &str, node_id: &str) -> AppResult<StoredNode> {
+        let mut db = self.db.clone();
+        let row = Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(
+                NodeRow::fields()
+                    .snapshot_id()
+                    .eq(snapshot_id)
+                    .and(NodeRow::fields().node_id().eq(node_id)),
             )
-            .optional()
+            .first()
+            .exec(&mut db)
+            .await
             .map_err(|error| sql_error("Failed to load a node index row.", error))?
             .ok_or_else(|| {
                 AppError::new(
@@ -870,12 +1032,12 @@ impl SnapshotRepository for Store {
                     "The requested node does not exist in the selected snapshot.",
                 )
             })?;
-        let raw_node = serde_json::from_slice(&self.blobs.get(&row.14)?)
+        let raw_node = serde_json::from_slice(&self.blobs.get(&row.node_blob_hash)?)
             .map_err(|error| corrupt_error("A node blob does not contain valid JSON.", error))?;
-        let path_ids = serde_json::from_str(&row.6).map_err(|error| {
+        let path_ids = serde_json::from_str(&row.path_ids).map_err(|error| {
             corrupt_error("A node path index does not contain valid JSON.", error)
         })?;
-        let bounds = match (row.8, row.9, row.10, row.11) {
+        let bounds = match (row.x, row.y, row.width, row.height) {
             (Some(x), Some(y), Some(width), Some(height)) => Some(BoundingBox {
                 x,
                 y,
@@ -884,116 +1046,104 @@ impl SnapshotRepository for Store {
             }),
             _ => None,
         };
-        let mut child_statement = connection
-            .prepare(
-                "SELECT node_id FROM nodes WHERE snapshot_id=?1 AND parent_id=?2 ORDER BY sibling_order",
+        let child_ids = Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(
+                NodeRow::fields()
+                    .snapshot_id()
+                    .eq(snapshot_id)
+                    .and(NodeRow::fields().parent_id().eq(Some(node_id.to_owned()))),
             )
-            .map_err(|error| sql_error("Failed to prepare child node lookup.", error))?;
-        let child_ids = collect_rows(
-            child_statement
-                .query_map(params![snapshot_id, node_id], |child| child.get(0))
-                .map_err(|error| sql_error("Failed to load child nodes.", error))?,
-            "Failed to decode a child node identifier.",
-        )?;
+            .order_by(NodeRow::fields().sibling_order().asc())
+            .select(NodeRow::fields().node_id())
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load child nodes.", error))?;
         Ok(StoredNode {
             index: IndexedNode {
-                node_id: row.0,
-                parent_id: row.1,
-                node_type: row.2,
-                name: row.3,
-                depth: row.4,
-                sibling_order: row.5,
+                node_id: row.node_id,
+                parent_id: row.parent_id,
+                node_type: row.node_type,
+                name: row.name,
+                depth: u32::try_from(row.depth)
+                    .map_err(|error| corrupt_error("A node depth cannot be represented.", error))?,
+                sibling_order: u32::try_from(row.sibling_order).map_err(|error| {
+                    corrupt_error("A node sibling order cannot be represented.", error)
+                })?,
                 path_ids,
-                visible: row.7,
+                visible: row.visible,
                 bounds,
-                component_id: row.12,
-                text_content: row.13,
+                component_id: row.component_id,
+                text_content: row.text_content,
                 raw: raw_node,
-                subtree_hash: row.15,
+                subtree_hash: row.subtree_hash,
             },
             child_ids,
         })
     }
 
-    fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT node_id,parent_id,node_type,name,sibling_order,path_ids,
-                        node_blob_hash,subtree_hash
-                 FROM nodes WHERE snapshot_id=?1 ORDER BY node_id",
-            )
-            .map_err(|error| sql_error("Failed to prepare snapshot node loading.", error))?;
-        let rows = statement
-            .query_map([snapshot_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, u32>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                ))
-            })
+    async fn load_diff_nodes(&self, snapshot_id: &str) -> AppResult<Vec<SnapshotDiffNode>> {
+        let mut db = self.db.clone();
+        let rows = Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(NodeRow::fields().snapshot_id().eq(snapshot_id))
+            .order_by(NodeRow::fields().node_id().asc())
+            .exec(&mut db)
+            .await
             .map_err(|error| sql_error("Failed to load snapshot node rows.", error))?;
-        let rows = collect_rows(rows, "Failed to decode a snapshot node row.")?;
         let mut nodes = Vec::with_capacity(rows.len());
         for row in rows {
-            let path_ids = serde_json::from_str(&row.5).map_err(|error| {
+            let path_ids = serde_json::from_str(&row.path_ids).map_err(|error| {
                 corrupt_error("A node path index does not contain valid JSON.", error)
             })?;
             nodes.push(SnapshotDiffNode {
-                node_id: row.0,
-                parent_id: row.1,
-                node_type: row.2,
-                name: row.3,
-                sibling_order: row.4,
+                node_id: row.node_id,
+                parent_id: row.parent_id,
+                node_type: row.node_type,
+                name: row.name,
+                sibling_order: u32::try_from(row.sibling_order).map_err(|error| {
+                    corrupt_error("A node sibling order cannot be represented.", error)
+                })?,
                 path_ids,
-                own_hash: row.6,
-                subtree_hash: row.7,
+                own_hash: row.node_blob_hash,
+                subtree_hash: row.subtree_hash,
             });
         }
         Ok(nodes)
     }
 
-    fn root_node_id(&self, snapshot_id: &str) -> AppResult<String> {
-        let connection = self.connection()?;
-        connection
-            .query_row(
-                "SELECT node_id FROM nodes WHERE snapshot_id=?1 AND parent_id IS NULL ORDER BY sibling_order LIMIT 1",
-                [snapshot_id],
-                |row| row.get(0),
-            )
-            .optional()
+    async fn root_node_id(&self, snapshot_id: &str) -> AppResult<String> {
+        let mut db = self.db.clone();
+        Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(NodeRow::fields().snapshot_id().eq(snapshot_id))
+            .order_by(NodeRow::fields().sibling_order().asc())
+            .exec(&mut db)
+            .await
             .map_err(|error| sql_error("Failed to resolve the document root.", error))?
+            .into_iter()
+            .find(|row| row.parent_id.is_none())
+            .map(|row| row.node_id)
             .ok_or_else(|| corrupt_error("A snapshot has no document root.", snapshot_id))
     }
 
-    fn node_candidates(
+    async fn node_candidates(
         &self,
         snapshot_id: &str,
         identifier_or_name: &str,
     ) -> AppResult<Vec<NodeSearchResult>> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT node_id,name,node_type,path_ids,depth FROM nodes
-                 WHERE snapshot_id=?1 AND (node_id=?2 OR lower(name) LIKE '%' || lower(?2) || '%')
-                 ORDER BY CASE WHEN node_id=?2 THEN 0 ELSE 1 END, depth, sibling_order LIMIT 5",
-            )
-            .map_err(|error| sql_error("Failed to prepare node candidates.", error))?;
-        let rows = statement
-            .query_map(
-                params![snapshot_id, identifier_or_name],
-                search_result_from_row,
-            )
-            .map_err(|error| sql_error("Failed to find node candidates.", error))?;
-        collect_rows(rows, "Failed to decode a node candidate.")
+        let mut db = self.db.clone();
+        let rows = toasty::sql::query(
+            "SELECT node_id,name,node_type,path_ids,depth FROM nodes
+             WHERE snapshot_id=?1 AND (node_id=?2 OR lower(name) LIKE '%' || lower(?2) || '%')
+             ORDER BY CASE WHEN node_id=?2 THEN 0 ELSE 1 END, depth, sibling_order LIMIT 5",
+        )
+        .bind(snapshot_id)
+        .bind(identifier_or_name)
+        .exec(&mut db)
+        .await
+        .map_err(|error| sql_error("Failed to find node candidates.", error))?;
+        decode_search_results(rows)
     }
 
-    fn search_nodes(
+    async fn search_nodes(
         &self,
         snapshot_id: &str,
         query: &NodeSearchQuery,
@@ -1011,66 +1161,70 @@ impl SnapshotRepository for Store {
             )
             .with_details(json!({"reason": error.to_string()}))
         })?;
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT n.node_id,n.name,n.node_type,n.path_ids,n.depth FROM nodes n
+        let mut db = self.db.clone();
+        let rows = toasty::sql::query(
+            "SELECT n.node_id,n.name,n.node_type,n.path_ids,n.depth FROM nodes n
                  WHERE n.snapshot_id=?1
-                   AND (?2 IS NULL OR lower(n.name) LIKE '%' || lower(?2) || '%')
-                   AND (?3 IS NULL OR n.node_type=?3)
-                   AND (?4 IS NULL OR EXISTS(SELECT 1 FROM json_each(n.path_ids) WHERE value=?4))
-                   AND (?5 IS NULL OR EXISTS(
+                   AND (?2=0 OR lower(n.name) LIKE '%' || lower(?3) || '%')
+                   AND (?4=0 OR n.node_type=?5)
+                   AND (?6=0 OR EXISTS(SELECT 1 FROM json_each(n.path_ids) WHERE value=?7))
+                   AND (?8=0 OR EXISTS(
                      SELECT 1 FROM node_fts f
-                     WHERE f.snapshot_id=n.snapshot_id AND f.node_id=n.node_id AND node_fts MATCH ?5
+                     WHERE f.snapshot_id=n.snapshot_id AND f.node_id=n.node_id AND node_fts MATCH ?9
                    ))
-                 ORDER BY n.depth,n.path_ids,n.sibling_order,n.node_id LIMIT ?6 OFFSET ?7",
-            )
-            .map_err(|error| sql_error("Failed to prepare local node search.", error))?;
-        let rows = statement
-            .query_map(
-                params![
-                    snapshot_id,
-                    query.name,
-                    query.node_type,
-                    query.ancestor_id,
-                    query.text,
-                    limit,
-                    sql_offset,
-                ],
-                search_result_from_row,
-            )
-            .map_err(|error| sql_error("Failed to search local nodes.", error))?;
-        let results = collect_rows(rows, "Failed to decode a node search result.")?;
+                 ORDER BY n.depth,n.path_ids,n.sibling_order,n.node_id LIMIT ?10 OFFSET ?11",
+        )
+        .bind(snapshot_id)
+        .bind(i64::from(query.name.is_some()))
+        .bind(query.name.as_deref().unwrap_or_default())
+        .bind(i64::from(query.node_type.is_some()))
+        .bind(query.node_type.as_deref().unwrap_or_default())
+        .bind(i64::from(query.ancestor_id.is_some()))
+        .bind(query.ancestor_id.as_deref().unwrap_or_default())
+        .bind(i64::from(query.text.is_some()))
+        .bind(query.text.as_deref().unwrap_or_default())
+        .bind(i64::from(limit))
+        .bind(sql_offset)
+        .exec(&mut db)
+        .await
+        .map_err(|error| sql_error("Failed to search local nodes.", error))?;
+        let results = decode_search_results(rows)?;
         let next = (results.len() == usize::try_from(limit).unwrap_or(usize::MAX))
             .then(|| format!("o:{}", offset + u64::from(limit)));
         Ok((results, next))
     }
 
-    fn load_styles(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
-        self.load_entities("styles", "style_id", snapshot_id, true)
+    async fn load_styles(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        self.load_styles_model(snapshot_id).await
     }
 
-    fn load_components(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
-        self.load_entities("components", "component_id", snapshot_id, false)
+    async fn load_components(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        self.load_components_model(snapshot_id).await
     }
 
-    fn load_component_sets(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
-        self.load_entities("component_sets", "component_set_id", snapshot_id, false)
+    async fn load_component_sets(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        self.load_component_sets_model(snapshot_id).await
     }
 
-    fn component_usage(&self, snapshot_id: &str, component_id: &str) -> AppResult<ComponentUsage> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT node_id FROM nodes WHERE snapshot_id=?1 AND component_id=?2 ORDER BY path_ids",
+    async fn component_usage(
+        &self,
+        snapshot_id: &str,
+        component_id: &str,
+    ) -> AppResult<ComponentUsage> {
+        let mut db = self.db.clone();
+        let instance_node_ids = Query::<toasty::stmt::List<NodeRow>>::all()
+            .filter(
+                NodeRow::fields().snapshot_id().eq(snapshot_id).and(
+                    NodeRow::fields()
+                        .component_id()
+                        .eq(Some(component_id.to_owned())),
+                ),
             )
-            .map_err(|error| sql_error("Failed to prepare component usage lookup.", error))?;
-        let instance_node_ids = collect_rows(
-            statement
-                .query_map(params![snapshot_id, component_id], |row| row.get(0))
-                .map_err(|error| sql_error("Failed to load component usage.", error))?,
-            "Failed to decode component usage.",
-        )?;
+            .order_by(NodeRow::fields().path_ids().asc())
+            .select(NodeRow::fields().node_id())
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load component usage.", error))?;
         Ok(ComponentUsage {
             component_id: component_id.to_owned(),
             instance_node_ids,
@@ -1079,143 +1233,235 @@ impl SnapshotRepository for Store {
 }
 
 impl Store {
-    fn load_entities(
-        &self,
-        table: &str,
-        id_column: &str,
-        snapshot_id: &str,
-        styles: bool,
-    ) -> AppResult<Vec<IndexedEntity>> {
-        if !matches!(table, "styles" | "components" | "component_sets") {
-            return Err(AppError::new(
-                ErrorCode::Internal,
-                "An unknown entity table was selected.",
-            ));
-        }
-        let connection = self.connection()?;
-        let third_column = if styles { "style_type" } else { "node_id" };
-        let sql = format!(
-            "SELECT {id_column},{third_column},name,json_blob_hash FROM {table} WHERE snapshot_id=?1 ORDER BY {id_column}"
-        );
-        let mut statement = connection
-            .prepare(&sql)
-            .map_err(|error| sql_error("Failed to prepare entity lookup.", error))?;
-        let rows = statement
-            .query_map([snapshot_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(|error| sql_error("Failed to load indexed entities.", error))?;
+    async fn load_styles_model(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        let mut db = self.db.clone();
+        let rows = Query::<toasty::stmt::List<StyleRow>>::all()
+            .filter(StyleRow::fields().snapshot_id().eq(snapshot_id))
+            .order_by(StyleRow::fields().style_id().asc())
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load indexed styles.", error))?;
         let mut entities = Vec::new();
         for row in rows {
-            let (id, third, name, hash) =
-                row.map_err(|error| sql_error("Failed to decode an indexed entity.", error))?;
-            let raw = serde_json::from_slice(&self.blobs.get(&hash)?).map_err(|error| {
-                corrupt_error("An entity blob does not contain valid JSON.", error)
-            })?;
+            let raw =
+                serde_json::from_slice(&self.blobs.get(&row.json_blob_hash)?).map_err(|error| {
+                    corrupt_error("An entity blob does not contain valid JSON.", error)
+                })?;
             entities.push(IndexedEntity {
-                id,
-                node_id: if styles { None } else { third.clone() },
-                name,
-                entity_type: if styles {
-                    third.unwrap_or_else(|| "style".to_owned())
-                } else if table == "components" {
-                    "component".to_owned()
-                } else {
-                    "component_set".to_owned()
-                },
+                id: row.style_id,
+                node_id: None,
+                name: row.name,
+                entity_type: row.style_type,
                 raw,
             });
         }
         Ok(entities)
     }
+
+    async fn load_components_model(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        let mut db = self.db.clone();
+        let rows = Query::<toasty::stmt::List<ComponentRow>>::all()
+            .filter(ComponentRow::fields().snapshot_id().eq(snapshot_id))
+            .order_by(ComponentRow::fields().component_id().asc())
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load indexed components.", error))?;
+        self.component_entities(rows, "component")
+    }
+
+    async fn load_component_sets_model(&self, snapshot_id: &str) -> AppResult<Vec<IndexedEntity>> {
+        let mut db = self.db.clone();
+        let rows = Query::<toasty::stmt::List<ComponentSetRow>>::all()
+            .filter(ComponentSetRow::fields().snapshot_id().eq(snapshot_id))
+            .order_by(ComponentSetRow::fields().component_set_id().asc())
+            .exec(&mut db)
+            .await
+            .map_err(|error| sql_error("Failed to load indexed component sets.", error))?;
+        let mut entities = Vec::with_capacity(rows.len());
+        for row in rows {
+            entities.push(self.entity_from_blob(
+                row.component_set_id,
+                row.node_id,
+                row.name,
+                "component_set",
+                &row.json_blob_hash,
+            )?);
+        }
+        Ok(entities)
+    }
+
+    fn component_entities(
+        &self,
+        rows: Vec<ComponentRow>,
+        entity_type: &str,
+    ) -> AppResult<Vec<IndexedEntity>> {
+        let mut entities = Vec::with_capacity(rows.len());
+        for row in rows {
+            entities.push(self.entity_from_blob(
+                row.component_id,
+                row.node_id,
+                row.name,
+                entity_type,
+                &row.json_blob_hash,
+            )?);
+        }
+        Ok(entities)
+    }
+
+    fn entity_from_blob(
+        &self,
+        id: String,
+        node_id: Option<String>,
+        name: Option<String>,
+        entity_type: &str,
+        hash: &str,
+    ) -> AppResult<IndexedEntity> {
+        let raw = serde_json::from_slice(&self.blobs.get(hash)?)
+            .map_err(|error| corrupt_error("An entity blob does not contain valid JSON.", error))?;
+        Ok(IndexedEntity {
+            id,
+            node_id,
+            name,
+            entity_type: entity_type.to_owned(),
+            raw,
+        })
+    }
 }
 
 impl AttemptRecorder for Store {
-    fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()> {
-        let connection = self.connection()?;
+    async fn record_attempt(&self, attempt: &ApiAttempt) -> AppResult<()> {
         let retry_after = attempt
             .retry_after
             .map(i64::try_from)
             .transpose()
             .map_err(|error| corrupt_error("Retry-After exceeds SQLite integer range.", error))?;
-        connection
-            .execute(
-                "INSERT INTO api_attempts(
-                  started_at,completed_at,command,endpoint_class,tier,file_key,request_profile,
-                  http_status,error_code,retry_after,plan_tier,rate_limit_type
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-                params![
-                    attempt.started_at.to_rfc3339(),
-                    attempt.completed_at.to_rfc3339(),
-                    attempt.command,
-                    endpoint_name(attempt.endpoint_class),
-                    tier_name(attempt.tier),
-                    attempt.file_key,
-                    attempt.request_profile,
-                    attempt.http_status,
-                    attempt.error_code,
-                    retry_after,
-                    attempt.plan_tier,
-                    attempt.rate_limit_type,
-                ],
-            )
-            .map_err(|error| sql_error("Failed to record a Figma request attempt.", error))?;
+        let mut db = self.db.clone();
+        toasty::create!(ApiAttemptRow {
+            started_at: attempt.started_at.to_rfc3339(),
+            completed_at: attempt.completed_at.to_rfc3339(),
+            command: attempt.command.clone(),
+            endpoint_class: endpoint_name(attempt.endpoint_class).to_owned(),
+            tier: tier_name(attempt.tier).to_owned(),
+            file_key: attempt.file_key.clone(),
+            request_profile: attempt.request_profile.clone(),
+            http_status: attempt.http_status.map(i64::from),
+            error_code: attempt.error_code.clone(),
+            retry_after,
+            plan_tier: attempt.plan_tier.clone(),
+            rate_limit_type: attempt.rate_limit_type.clone(),
+        })
+        .exec(&mut db)
+        .await
+        .map_err(|error| sql_error("Failed to record a Figma request attempt.", error))?;
         Ok(())
     }
 }
 
-fn snapshot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotSummary> {
-    let fetched: String = row.get(5)?;
-    let fetched_at = DateTime::parse_from_rfc3339(&fetched)
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?
+fn snapshot_from_model(row: SnapshotRow, is_head: bool) -> AppResult<SnapshotSummary> {
+    let fetched_at = DateTime::parse_from_rfc3339(&row.fetched_at)
+        .map_err(|error| corrupt_error("A snapshot timestamp is invalid.", error))?
         .with_timezone(&Utc);
     Ok(SnapshotSummary {
-        id: row.get(0)?,
-        file_key: row.get(1)?,
-        figma_version: row.get(2)?,
-        request_profile: row.get(3)?,
-        file_name: row.get(4)?,
+        id: row.id,
+        file_key: row.file_key,
+        figma_version: row.figma_version,
+        request_profile: row.request_profile,
+        file_name: row.file_name,
         fetched_at,
-        last_modified: row.get(6)?,
-        raw_blob_hash: row.get(7)?,
-        raw_size: nonnegative_integer(row, 8)?,
-        node_count: nonnegative_integer(row, 9)?,
-        parser_version: row.get(10)?,
-        is_head: row.get(11)?,
+        last_modified: row.last_modified,
+        raw_blob_hash: row.raw_blob_hash,
+        raw_size: u64::try_from(row.raw_size)
+            .map_err(|error| corrupt_error("A snapshot raw size is invalid.", error))?,
+        node_count: u64::try_from(row.node_count)
+            .map_err(|error| corrupt_error("A snapshot node count is invalid.", error))?,
+        parser_version: u32::try_from(row.parser_version)
+            .map_err(|error| corrupt_error("A snapshot parser version is invalid.", error))?,
+        is_head,
     })
 }
 
-fn search_result_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NodeSearchResult> {
-    let path_json: String = row.get(3)?;
-    let path_ids = serde_json::from_str(&path_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-    Ok(NodeSearchResult {
-        node_id: row.get(0)?,
-        name: row.get(1)?,
-        node_type: row.get(2)?,
-        path_ids,
-        depth: row.get(4)?,
+fn snapshot_missing_error(selector: SnapshotSelector<'_>) -> AppError {
+    let code = if selector.snapshot_id.is_some() {
+        ErrorCode::SnapshotNotFound
+    } else {
+        ErrorCode::SnapshotMissing
+    };
+    AppError::new(
+        code,
+        "No local snapshot matches this file and request profile.",
+    )
+    .with_details(json!({
+        "fileKey": selector.file_key,
+        "requestProfile": selector.request_profile,
+        "snapshotId": selector.snapshot_id,
+        "suggestedCommand": format!("figstash snapshot pull {}", selector.file_key),
+    }))
+}
+
+fn decode_search_results(rows: Vec<toasty::stmt::Value>) -> AppResult<Vec<NodeSearchResult>> {
+    let mut results = Vec::with_capacity(rows.len());
+    for row in rows {
+        let toasty::stmt::Value::Record(record) = row else {
+            return Err(corrupt_error(
+                "A node search row has an invalid shape.",
+                "expected a record",
+            ));
+        };
+        let mut fields = record.into_iter();
+        let node_id = value_string(next_value(&mut fields)?)?;
+        let name = value_string(next_value(&mut fields)?)?;
+        let node_type = value_string(next_value(&mut fields)?)?;
+        let path_json = value_string(next_value(&mut fields)?)?;
+        let depth = u32::try_from(value_i64(next_value(&mut fields)?)?)
+            .map_err(|error| corrupt_error("A node search depth is invalid.", error))?;
+        if fields.next().is_some() {
+            return Err(corrupt_error(
+                "A node search row has an invalid shape.",
+                "unexpected trailing fields",
+            ));
+        }
+        let path_ids = serde_json::from_str(&path_json)
+            .map_err(|error| corrupt_error("A node path index is invalid.", error))?;
+        results.push(NodeSearchResult {
+            node_id,
+            name,
+            node_type,
+            path_ids,
+            depth,
+        });
+    }
+    Ok(results)
+}
+
+fn next_value(
+    fields: &mut impl Iterator<Item = toasty::stmt::Value>,
+) -> AppResult<toasty::stmt::Value> {
+    fields.next().ok_or_else(|| {
+        corrupt_error(
+            "A database row has an invalid shape.",
+            "a required field is missing",
+        )
     })
 }
 
-fn collect_rows<T>(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
-    context: &'static str,
-) -> AppResult<Vec<T>> {
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| sql_error(context, error))
+fn value_string(value: toasty::stmt::Value) -> AppResult<String> {
+    match value {
+        toasty::stmt::Value::String(value) => Ok(value),
+        value => Err(corrupt_error(
+            "A database field has an invalid type.",
+            format!("expected string, got {value:?}"),
+        )),
+    }
+}
+
+fn value_i64(value: toasty::stmt::Value) -> AppResult<i64> {
+    match value {
+        toasty::stmt::Value::I64(value) => Ok(value),
+        value => Err(corrupt_error(
+            "A database field has an invalid type.",
+            format!("expected i64, got {value:?}"),
+        )),
+    }
 }
 
 fn parse_cursor(cursor: Option<&str>) -> AppResult<u64> {
@@ -1234,56 +1480,55 @@ fn parse_cursor(cursor: Option<&str>) -> AppResult<u64> {
         })
 }
 
-fn grouped_attempts(
-    connection: &Connection,
-    column: &str,
-    month_prefix: &str,
+fn grouped_attempt_models<'a>(
+    attempts: &'a [ApiAttemptRow],
+    key: impl Fn(&'a ApiAttemptRow) -> &'a str,
 ) -> AppResult<Vec<QuotaBucket>> {
-    if !matches!(
-        column,
-        "tier" | "endpoint_class" | "command" | "COALESCE(file_key, 'none')"
-    ) {
-        return Err(AppError::new(
-            ErrorCode::Internal,
-            "An unknown quota grouping was selected.",
-        ));
+    let mut groups = std::collections::BTreeMap::<String, (u64, u64)>::new();
+    for attempt in attempts {
+        let entry = groups.entry(key(attempt).to_owned()).or_default();
+        entry.0 = entry
+            .0
+            .checked_add(1)
+            .ok_or_else(|| corrupt_error("A quota grouping count overflowed.", "attempted"))?;
+        if attempt
+            .http_status
+            .is_some_and(|status| (200..=299).contains(&status))
+        {
+            entry.1 = entry
+                .1
+                .checked_add(1)
+                .ok_or_else(|| corrupt_error("A quota grouping count overflowed.", "succeeded"))?;
+        }
     }
-    let sql = format!(
-        "SELECT {column},COUNT(*),COALESCE(SUM(CASE WHEN http_status BETWEEN 200 AND 299 THEN 1 ELSE 0 END),0)
-         FROM api_attempts WHERE completed_at LIKE ?1 GROUP BY {column} ORDER BY {column}"
-    );
-    let mut statement = connection
-        .prepare(&sql)
-        .map_err(|error| sql_error("Failed to prepare a quota grouping.", error))?;
-    let rows = statement
-        .query_map([month_prefix], |row| {
-            Ok(QuotaBucket {
-                key: row.get(0)?,
-                attempted: nonnegative_integer(row, 1)?,
-                succeeded: nonnegative_integer(row, 2)?,
-            })
+    Ok(groups
+        .into_iter()
+        .map(|(key, (attempted, succeeded))| QuotaBucket {
+            key,
+            attempted,
+            succeeded,
         })
-        .map_err(|error| sql_error("Failed to summarize quota grouping.", error))?;
-    collect_rows(rows, "Failed to decode a quota grouping.")
+        .collect())
 }
 
-fn latest_rate_limit(connection: &Connection) -> AppResult<Option<RecentRateLimit>> {
-    connection
-        .query_row(
-            "SELECT completed_at,retry_after,plan_tier,rate_limit_type FROM api_attempts
-             WHERE http_status=429 ORDER BY completed_at DESC,id DESC LIMIT 1",
-            [],
-            |row| {
-                Ok(RecentRateLimit {
-                    completed_at: row.get(0)?,
-                    retry_after: optional_nonnegative_integer(row, 1)?,
-                    plan_tier: row.get(2)?,
-                    rate_limit_type: row.get(3)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| sql_error("Failed to load the latest rate limit response.", error))
+fn latest_rate_limit_model(attempts: &[ApiAttemptRow]) -> AppResult<Option<RecentRateLimit>> {
+    attempts
+        .iter()
+        .filter(|attempt| attempt.http_status == Some(429))
+        .max_by(|left, right| {
+            (left.completed_at.as_str(), left.id).cmp(&(right.completed_at.as_str(), right.id))
+        })
+        .map(|attempt| {
+            Ok(RecentRateLimit {
+                completed_at: attempt.completed_at.clone(),
+                retry_after: attempt.retry_after.map(u64::try_from).transpose().map_err(
+                    |error| corrupt_error("A stored Retry-After value is invalid.", error),
+                )?,
+                plan_tier: attempt.plan_tier.clone(),
+                rate_limit_type: attempt.rate_limit_type.clone(),
+            })
+        })
+        .transpose()
 }
 
 const fn endpoint_name(endpoint: EndpointClass) -> &'static str {
@@ -1302,33 +1547,6 @@ const fn tier_name(tier: Tier) -> &'static str {
         Tier::Tier2 => "tier2",
         Tier::Tier3 => "tier3",
     }
-}
-
-fn nonnegative_integer(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
-    let value = row.get::<_, i64>(index)?;
-    u64::try_from(value).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            index,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
-        )
-    })
-}
-
-fn optional_nonnegative_integer(
-    row: &rusqlite::Row<'_>,
-    index: usize,
-) -> rusqlite::Result<Option<u64>> {
-    row.get::<_, Option<i64>>(index)?
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                index,
-                rusqlite::types::Type::Integer,
-                Box::new(error),
-            )
-        })
 }
 
 pub(crate) fn restrict_directory(path: &Path) -> AppResult<()> {
@@ -1361,17 +1579,20 @@ mod tests {
         br#"{"name":"Example","version":"1","document":{"id":"0:0","name":"Doc","type":"DOCUMENT","children":[{"id":"1:1","name":"Title","type":"TEXT","characters":"Hello"}]},"styles":{},"components":{},"componentSets":{}}"#
     }
 
-    #[test]
-    fn failed_precommit_does_not_move_head_and_committed_snapshot_is_queryable() {
+    #[tokio::test]
+    async fn failed_precommit_does_not_move_head_and_committed_snapshot_is_queryable() {
         let temporary = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
         let store = Store::open(temporary.path())
+            .await
             .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
-        let missing = store.resolve_snapshot(SnapshotSelector {
-            file_key: "fileKey123",
-            request_profile: RequestProfile::default().key(),
-            snapshot_id: None,
-        });
+        let missing = store
+            .resolve_snapshot(SnapshotSelector {
+                file_key: "fileKey123",
+                request_profile: RequestProfile::default().key(),
+                snapshot_id: None,
+            })
+            .await;
         assert!(missing.is_err());
 
         let stage = store
@@ -1387,9 +1608,11 @@ mod tests {
                 &stage,
                 &indexed,
             )
+            .await
             .unwrap_or_else(|error| panic!("snapshot commit failed: {error}"));
         let node = store
             .load_node(&summary.id, "1:1")
+            .await
             .unwrap_or_else(|error| panic!("node lookup failed: {error}"));
         assert_eq!(node.index.text_content.as_deref(), Some("Hello"));
 
@@ -1409,6 +1632,7 @@ mod tests {
                     &failed_stage,
                     &invalid_index,
                 )
+                .await
                 .is_err()
         );
         let unchanged = store
@@ -1417,15 +1641,36 @@ mod tests {
                 request_profile: RequestProfile::default().key(),
                 snapshot_id: None,
             })
+            .await
             .unwrap_or_else(|error| panic!("head lookup failed: {error}"));
         assert_eq!(unchanged.id, summary.id);
+
+        drop(store);
+        let reopened = Store::open(temporary.path())
+            .await
+            .unwrap_or_else(|error| panic!("existing catalog failed to reopen: {error}"));
+        let persisted = reopened
+            .resolve_snapshot(SnapshotSelector {
+                file_key: "fileKey123",
+                request_profile: RequestProfile::default().key(),
+                snapshot_id: None,
+            })
+            .await
+            .unwrap_or_else(|error| panic!("reopened head lookup failed: {error}"));
+        assert_eq!(persisted.id, summary.id);
+        let persisted_node = reopened
+            .load_node(&persisted.id, "1:1")
+            .await
+            .unwrap_or_else(|error| panic!("reopened node lookup failed: {error}"));
+        assert_eq!(persisted_node.index.text_content.as_deref(), Some("Hello"));
     }
 
-    #[test]
-    fn writer_lock_is_exclusive_and_store_permissions_are_private() {
+    #[tokio::test]
+    async fn writer_lock_is_exclusive_and_store_permissions_are_private() {
         let temporary = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
         let store = Store::open(temporary.path())
+            .await
             .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
         let _first = store
             .try_lock("fileKey123", RequestProfile::default().key())
@@ -1454,11 +1699,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prune_requires_execution_and_never_deletes_the_current_or_only_snapshot() {
+    #[tokio::test]
+    async fn prune_requires_execution_and_never_deletes_the_current_or_only_snapshot() {
         let temporary = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
         let store = Store::open(temporary.path())
+            .await
             .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
         let first_stage = store
             .create_staging_file()
@@ -1473,10 +1719,12 @@ mod tests {
                 &first_stage,
                 &first_index,
             )
+            .await
             .unwrap_or_else(|error| panic!("first snapshot commit failed: {error}"));
         assert!(
             store
                 .prune_plan()
+                .await
                 .unwrap_or_else(|error| panic!("first prune plan failed: {error}"))
                 .snapshot_ids
                 .is_empty()
@@ -1498,15 +1746,18 @@ mod tests {
                 &second_stage,
                 &second_index,
             )
+            .await
             .unwrap_or_else(|error| panic!("second snapshot commit failed: {error}"));
         let plan = store
             .prune_plan()
+            .await
             .unwrap_or_else(|error| panic!("prune plan failed: {error}"));
         assert_eq!(plan.snapshot_ids, [first.id]);
         assert!(!plan.executed);
         assert_eq!(
             store
                 .list_snapshots(None)
+                .await
                 .unwrap_or_else(|error| panic!("pre-prune list failed: {error}"))
                 .len(),
             2
@@ -1514,10 +1765,12 @@ mod tests {
 
         let executed = store
             .execute_prune()
+            .await
             .unwrap_or_else(|error| panic!("prune execution failed: {error}"));
         assert!(executed.executed);
         let remaining = store
             .list_snapshots(None)
+            .await
             .unwrap_or_else(|error| panic!("post-prune list failed: {error}"));
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, second.id);

@@ -106,10 +106,10 @@ pub fn compact_node(node: &StoredNode, children: Vec<CompactNode>) -> CompactNod
 /// Reconstructs raw node JSON from independent node blobs.
 pub fn raw_node(node: &StoredNode, children: Vec<Value>) -> Value {
     let mut raw = node.index.raw.clone();
-    if !children.is_empty() {
-        if let Some(object) = raw.as_object_mut() {
-            object.insert("children".to_owned(), Value::Array(children));
-        }
+    if !children.is_empty()
+        && let Some(object) = raw.as_object_mut()
+    {
+        object.insert("children".to_owned(), Value::Array(children));
     }
     raw
 }
@@ -186,10 +186,10 @@ fn find_image_references(raw: Option<&Map<String, Value>>) -> Vec<String> {
             continue;
         };
         for paint in paints {
-            if let Some(reference) = paint.get("imageRef").and_then(Value::as_str) {
-                if !references.iter().any(|known| known == reference) {
-                    references.push(reference.to_owned());
-                }
+            if let Some(reference) = paint.get("imageRef").and_then(Value::as_str)
+                && !references.iter().any(|known| known == reference)
+            {
+                references.push(reference.to_owned());
             }
         }
     }

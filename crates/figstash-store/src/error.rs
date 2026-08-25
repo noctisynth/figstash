@@ -10,7 +10,7 @@ pub(crate) fn io_error(context: &'static str, error: std::io::Error) -> AppError
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn sql_error(context: &'static str, error: rusqlite::Error) -> AppError {
+pub(crate) fn sql_error(context: &'static str, error: impl ToString) -> AppError {
     AppError::new(ErrorCode::StoreFailed, context)
         .with_details(json!({"reason": error.to_string()}))
 }

@@ -263,7 +263,7 @@ P2/P3 crate 在对应阶段开始前不创建空壳，避免提前固化无用�
 | CLI | `clap` | 分层 subcommand、稳定参数解析；解析错误会被适配为 JSON |
 | Async/HTTP | `tokio`、`reqwest` + rustls | 流式下载、代理环境兼容、无 OpenSSL 运行时依赖 |
 | 序列化 | `serde`、`serde_json` | Figma payload 与 CLI 契约 |
-| 存储 | `rusqlite`（bundled SQLite） | 单进程/多进程本地索引、事务和 FTS5 |
+| 存储 | `toasty` + SQLite | 类型化模型与 CRUD；SQLite driver 继续提供 bundled SQLite、事务和本地持久化 |
 | 压缩/哈希 | `zstd`、`blake3` | 大型 JSON/节点 blob 与内容寻址 |
 | 配置路径 | `directories` | OS 标准 data/config 目录 |
 | Secret | `secrecy`、`zeroize`、系统 keyring adapter | 防止 token 进入 Debug/日志；PAT 不写普通配置 |
@@ -271,6 +271,9 @@ P2/P3 crate 在对应阶段开始前不创建空壳，避免提前固化无用�
 | 测试 | `insta`、`tempfile`、`assert_cmd`、HTTP mock | 可 review 的 golden snapshot 与全链路离线测试 |
 
 依赖版本由 `Cargo.lock` 固定；方案文档不绑定易过期的具体 patch 版本。
+
+workspace 使用 Rust edition 2024，MSRV 为 Rust 1.95；该下限由 Toasty 当前公开版本的
+`rust-version` 决定。
 
 ## 9. CLI 契约
 
@@ -640,6 +643,12 @@ schema_migrations(version, applied_at, checksum)
 
 大对象使用 zstd blob；SQLite 保存索引、关系和 hash。原始完整响应始终保留，允许在不重新访问 Figma 的情况下重建新版本派生索引。
 
+常规表、关系和 CRUD 使用 Toasty model/query API。FTS5 virtual table、SQLite `PRAGMA`、
+JSON1 reachability 查询和其他 Toasty model API 无法表达的 SQLite 专属操作，统一通过
+Toasty raw SQL API 执行；业务代码不得直接持有 `rusqlite::Connection`。Toasty 是 async
+边界，因此 `SnapshotRepository`、请求账本和其 query/gateway 调用链也使用 async 契约，
+但本地 query 仍不得获得 Figma HTTP client。
+
 ### 12.4 原子性和并发
 
 - 每个 `(file_key, request_profile)` 使用跨进程文件锁。
@@ -906,7 +915,8 @@ GetCurrentUser -> Tier3
 - `figstash-core`、`figstash-store`、`figstash-query`、`figstash-figma` 和 `figstash-cli` 均发布到 crates.io；发布只能由 GitHub Actions 中的 Semifold CI 执行。本地和 Agent 环境只允许使用 `cargo publish --dry-run` 与 `cargo package` 验证发布包。
 - 全部 package 使用 `AGPL-3.0-only`，共享仓库、README、关键词和 crates.io category 元数据；cargo-deny 只对这五个 workspace package 设置 AGPL 例外，第三方依赖的许可证 allowlist 不变。内部依赖同时声明本地 `path` 与 registry `version`，由 Semifold 在 release branch 上随 package 版本同步更新。
 - 首次发布按依赖拓扑执行：先发布 `figstash-core`，再发布依赖它的 library crates，最后发布 `figstash-cli`。在 `figstash-core` 尚未进入 crates.io 前，下游 package 的 Cargo dry-run 预期停在 registry dependency lookup；这不允许绕过 Semifold 执行真实本地发布。
-- store migration 必须事务化，并在 destructive migration 前创建 catalog 备份。
+- store migration 使用 Toasty transaction 和 model API 执行；Figstash 保留自己的 migration tracking、checksum、兼容性检查和 destructive migration 前 catalog 备份。
+- 已存在的 `store-v1/catalog.sqlite3`、逻辑表名和数据保持原地兼容；采用 Toasty 不得要求用户重新 pull。
 - 原始 blob 格式尽量 append-only；新 transformer 可从旧 raw blob 重建派生数据。
 - 新 CLI schema 先以 additive 字段演进；删除/改义才升级 `schemaVersion`。
 - alpha 阶段发布 crates.io package 和本地 binary，但不自动修改 shell/MCP 配置。

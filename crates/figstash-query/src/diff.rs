@@ -151,27 +151,27 @@ pub struct EntityChangesByKind {
     pub component_sets: EntityDiff,
 }
 
-pub(crate) fn compare_snapshots<R: SnapshotRepository>(
+pub(crate) async fn compare_snapshots<R: SnapshotRepository>(
     repository: &R,
     snapshot_a: SnapshotSummary,
     snapshot_b: SnapshotSummary,
     filters: SnapshotDiffFilters<'_>,
 ) -> AppResult<SnapshotDiffData> {
-    let before_nodes = repository.load_diff_nodes(&snapshot_a.id)?;
-    let after_nodes = repository.load_diff_nodes(&snapshot_b.id)?;
+    let before_nodes = repository.load_diff_nodes(&snapshot_a.id).await?;
+    let after_nodes = repository.load_diff_nodes(&snapshot_b.id).await?;
     let nodes = compare_nodes(before_nodes, after_nodes, filters);
     let entities = EntityChangesByKind {
         styles: compare_entities(
-            repository.load_styles(&snapshot_a.id)?,
-            repository.load_styles(&snapshot_b.id)?,
+            repository.load_styles(&snapshot_a.id).await?,
+            repository.load_styles(&snapshot_b.id).await?,
         ),
         components: compare_entities(
-            repository.load_components(&snapshot_a.id)?,
-            repository.load_components(&snapshot_b.id)?,
+            repository.load_components(&snapshot_a.id).await?,
+            repository.load_components(&snapshot_b.id).await?,
         ),
         component_sets: compare_entities(
-            repository.load_component_sets(&snapshot_a.id)?,
-            repository.load_component_sets(&snapshot_b.id)?,
+            repository.load_component_sets(&snapshot_a.id).await?,
+            repository.load_component_sets(&snapshot_b.id).await?,
         ),
     };
     let summary = SnapshotDiffSummary {

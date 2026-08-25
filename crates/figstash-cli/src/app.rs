@@ -50,14 +50,14 @@ pub(crate) async fn run(cli: Cli) -> i32 {
 
 async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
     match &cli.command {
-        Command::Context(args) => context_get(config, args),
-        Command::Outline(args) => outline_get(config, args),
+        Command::Context(args) => context_get(config, args).await,
+        Command::Outline(args) => outline_get(config, args).await,
         Command::Schema(args) => schema_get(args),
         Command::Auth(auth) => auth_command(config, cli.offline, &auth.command).await,
         Command::Doctor(args) => doctor(config, cli.offline, args.network).await,
         Command::Quota(quota) => match quota.command {
             QuotaSubcommand::Status => {
-                serialize_local(Store::open(&config.data_dir)?.quota_status()?)
+                serialize_local(Store::open(&config.data_dir).await?.quota_status().await?)
             }
         },
         Command::Snapshot(snapshot) => match &snapshot.command {
@@ -65,12 +65,14 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
             SnapshotSubcommand::Status(args) => {
                 let target = parse_figma_target(&args.target)?;
                 let profile = request_profile(args.geometry);
-                let summary =
-                    Store::open(&config.data_dir)?.resolve_snapshot(SnapshotSelector {
+                let summary = Store::open(&config.data_dir)
+                    .await?
+                    .resolve_snapshot(SnapshotSelector {
                         file_key: target.effective_file_key(),
                         request_profile: profile.key(),
                         snapshot_id: args.snapshot.as_deref(),
-                    })?;
+                    })
+                    .await?;
                 local_with_snapshot(
                     json!({
                         "snapshot": summary,
@@ -85,35 +87,35 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
             SnapshotSubcommand::List(args) => {
                 let file_key = args.file.as_deref().map(parse_figma_target).transpose()?;
                 serialize_local(json!({
-                    "snapshots": Store::open(&config.data_dir)?
-                        .list_snapshots(file_key.as_ref().map(figstash_figma::FigmaTarget::effective_file_key))?
+                    "snapshots": Store::open(&config.data_dir).await?
+                        .list_snapshots(file_key.as_ref().map(figstash_figma::FigmaTarget::effective_file_key)).await?
                 }))
             }
-            SnapshotSubcommand::Diff(args) => snapshot_diff(config, args),
+            SnapshotSubcommand::Diff(args) => snapshot_diff(config, args).await,
             SnapshotSubcommand::Prune(args) => {
-                let store = Store::open(&config.data_dir)?;
+                let store = Store::open(&config.data_dir).await?;
                 if args.execute {
-                    serialize_local(store.execute_prune()?)
+                    serialize_local(store.execute_prune().await?)
                 } else {
-                    serialize_local(store.prune_plan()?)
+                    serialize_local(store.prune_plan().await?)
                 }
             }
         },
         Command::Node(node) => match &node.command {
-            NodeSubcommand::Get(args) => node_get(config, args),
-            NodeSubcommand::Search(args) => node_search(config, args),
+            NodeSubcommand::Get(args) => node_get(config, args).await,
+            NodeSubcommand::Search(args) => node_search(config, args).await,
         },
         Command::Tokens(tokens) => match &tokens.command {
             TokensSubcommand::Get(args) => {
                 let target = parse_figma_target(&args.target)?;
                 let profile = request_profile(args.geometry);
-                let data = QueryService::new(Store::open(&config.data_dir)?).tokens_get(
-                    SnapshotSelector {
+                let data = QueryService::new(Store::open(&config.data_dir).await?)
+                    .tokens_get(SnapshotSelector {
                         file_key: target.effective_file_key(),
                         request_profile: profile.key(),
                         snapshot_id: args.snapshot.as_deref(),
-                    },
-                )?;
+                    })
+                    .await?;
                 local_with_snapshot(&data, &data.snapshot)
             }
         },
@@ -121,45 +123,47 @@ async fn dispatch(cli: &Cli, config: &AppConfig) -> AppResult<CommandOutput> {
             ComponentsSubcommand::List(args) => {
                 let target = parse_figma_target(&args.target)?;
                 let profile = request_profile(args.geometry);
-                let data = QueryService::new(Store::open(&config.data_dir)?).components_list(
-                    SnapshotSelector {
+                let data = QueryService::new(Store::open(&config.data_dir).await?)
+                    .components_list(SnapshotSelector {
                         file_key: target.effective_file_key(),
                         request_profile: profile.key(),
                         snapshot_id: args.snapshot.as_deref(),
-                    },
-                )?;
+                    })
+                    .await?;
                 local_with_snapshot(&data, &data.snapshot)
             }
         },
     }
 }
 
-fn snapshot_diff(config: &AppConfig, args: &SnapshotDiffArgs) -> AppResult<CommandOutput> {
+async fn snapshot_diff(config: &AppConfig, args: &SnapshotDiffArgs) -> AppResult<CommandOutput> {
     let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
     let profile = request_profile(args.geometry);
     let path_prefix = args.path.as_deref().map(parse_diff_path).transpose()?;
-    let service = QueryService::new(Store::open(&config.data_dir)?);
-    let data = service.snapshot_diff(
-        SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: Some(&args.snapshot_a),
-        },
-        SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: Some(&args.snapshot_b),
-        },
-        SnapshotDiffFilters {
-            node_id: node_id.as_deref(),
-            node_type: args.node_type.as_deref(),
-            path_prefix: path_prefix.as_deref(),
-        },
-    )?;
+    let service = QueryService::new(Store::open(&config.data_dir).await?);
+    let data = service
+        .snapshot_diff(
+            SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: Some(&args.snapshot_a),
+            },
+            SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: Some(&args.snapshot_b),
+            },
+            SnapshotDiffFilters {
+                node_id: node_id.as_deref(),
+                node_type: args.node_type.as_deref(),
+                path_prefix: path_prefix.as_deref(),
+            },
+        )
+        .await?;
     serialize_local(data)
 }
 
-fn context_get(config: &AppConfig, args: &ContextArgs) -> AppResult<CommandOutput> {
+async fn context_get(config: &AppConfig, args: &ContextArgs) -> AppResult<CommandOutput> {
     let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
     let node_id = node_id.ok_or_else(|| {
         AppError::new(
@@ -172,31 +176,35 @@ fn context_get(config: &AppConfig, args: &ContextArgs) -> AppResult<CommandOutpu
         }))
     })?;
     let profile = request_profile(args.geometry);
-    let data = QueryService::new(Store::open(&config.data_dir)?).node_get(NodeGetOptions {
-        selector: SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: args.snapshot.as_deref(),
-        },
-        node_id: Some(&node_id),
-        depth: args.depth,
-        view: View::Compact,
-    })?;
+    let data = QueryService::new(Store::open(&config.data_dir).await?)
+        .node_get(NodeGetOptions {
+            selector: SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: args.snapshot.as_deref(),
+            },
+            node_id: Some(&node_id),
+            depth: args.depth,
+            view: View::Compact,
+        })
+        .await?;
     local_with_snapshot(&data, &data.snapshot)
 }
 
-fn outline_get(config: &AppConfig, args: &OutlineArgs) -> AppResult<CommandOutput> {
+async fn outline_get(config: &AppConfig, args: &OutlineArgs) -> AppResult<CommandOutput> {
     let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
     let profile = request_profile(args.geometry);
-    let data = QueryService::new(Store::open(&config.data_dir)?).outline(
-        SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: args.snapshot.as_deref(),
-        },
-        node_id.as_deref(),
-        args.depth,
-    )?;
+    let data = QueryService::new(Store::open(&config.data_dir).await?)
+        .outline(
+            SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: args.snapshot.as_deref(),
+            },
+            node_id.as_deref(),
+            args.depth,
+        )
+        .await?;
     local_with_snapshot(&data, &data.snapshot)
 }
 
@@ -263,7 +271,7 @@ async fn auth_command(
                 ));
             }
             let credential = provider.resolve()?;
-            let store = Store::open(&config.data_dir)?;
+            let store = Store::open(&config.data_dir).await?;
             let stage = store.create_staging_file()?;
             let transport = ReqwestTransport::new(
                 config.connect_timeout,
@@ -308,7 +316,7 @@ where
 }
 
 async fn doctor(config: &AppConfig, offline: bool, network: bool) -> AppResult<CommandOutput> {
-    let store = Store::open(&config.data_dir)?;
+    let store = Store::open(&config.data_dir).await?;
     let credential_source = PatProvider::new(SystemKeyring).status().ok().flatten();
     let mut checks = vec![
         json!({"name": "data_directory", "ok": store.root().is_dir(), "path": store.root()}),
@@ -357,13 +365,15 @@ async fn snapshot_pull(
             "Snapshot pull is disabled by `--offline`.",
         ));
     }
-    let store = Store::open(&config.data_dir)?;
+    let store = Store::open(&config.data_dir).await?;
     let _lock = store.try_lock(file_key, profile.key())?;
-    let existing = store.resolve_snapshot(SnapshotSelector {
-        file_key,
-        request_profile: profile.key(),
-        snapshot_id: None,
-    });
+    let existing = store
+        .resolve_snapshot(SnapshotSelector {
+            file_key,
+            request_profile: profile.key(),
+            snapshot_id: None,
+        })
+        .await;
     if existing.is_ok() && !args.force && args.version.is_none() {
         return Err(AppError::new(
             ErrorCode::MetadataUnavailable,
@@ -376,10 +386,10 @@ async fn snapshot_pull(
             "tier1Attempted": 0
         })));
     }
-    if let Err(error) = &existing {
-        if !matches!(error.code(), ErrorCode::SnapshotMissing) {
-            return Err(error.clone());
-        }
+    if let Err(error) = &existing
+        && !matches!(error.code(), ErrorCode::SnapshotMissing)
+    {
+        return Err(error.clone());
     }
     let credential = PatProvider::new(SystemKeyring).resolve()?;
     let transport = ReqwestTransport::new(
@@ -448,6 +458,7 @@ where
     let warnings = indexed.warnings.clone();
     let summary = store
         .commit_snapshot(file_key, profile.key(), &stage, &indexed)
+        .await
         .map_err(|error| error.with_detail("network", json!(receipt.network)))?;
     Ok(CommandOutput {
         data: json!({
@@ -465,23 +476,25 @@ where
     })
 }
 
-fn node_get(config: &AppConfig, args: &crate::args::NodeGetArgs) -> AppResult<CommandOutput> {
+async fn node_get(config: &AppConfig, args: &crate::args::NodeGetArgs) -> AppResult<CommandOutput> {
     let (target, node_id) = target_and_node(&args.target, args.node.as_deref())?;
     let profile = request_profile(args.geometry);
-    let store = Store::open(&config.data_dir)?;
-    let data = QueryService::new(store).node_get(NodeGetOptions {
-        selector: SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: args.snapshot.as_deref(),
-        },
-        node_id: node_id.as_deref(),
-        depth: args.depth,
-        view: match args.view {
-            ViewArg::Compact => View::Compact,
-            ViewArg::Raw => View::Raw,
-        },
-    })?;
+    let store = Store::open(&config.data_dir).await?;
+    let data = QueryService::new(store)
+        .node_get(NodeGetOptions {
+            selector: SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: args.snapshot.as_deref(),
+            },
+            node_id: node_id.as_deref(),
+            depth: args.depth,
+            view: match args.view {
+                ViewArg::Compact => View::Compact,
+                ViewArg::Raw => View::Raw,
+            },
+        })
+        .await?;
     local_with_snapshot(&data, &data.snapshot)
 }
 
@@ -491,14 +504,14 @@ fn target_and_node(
 ) -> AppResult<(FigmaTarget, Option<String>)> {
     let target = parse_figma_target(target)?;
     let explicit_node = explicit_node.map(normalize_node_id).transpose()?;
-    if let (Some(url_node), Some(explicit)) = (&target.node_id, &explicit_node) {
-        if url_node != explicit {
-            return Err(AppError::new(
-                ErrorCode::InvalidArguments,
-                "The URL node ID and `--node` identify different nodes.",
-            )
-            .with_details(json!({"urlNode": url_node, "explicitNode": explicit})));
-        }
+    if let (Some(url_node), Some(explicit)) = (&target.node_id, &explicit_node)
+        && url_node != explicit
+    {
+        return Err(AppError::new(
+            ErrorCode::InvalidArguments,
+            "The URL node ID and `--node` identify different nodes.",
+        )
+        .with_details(json!({"urlNode": url_node, "explicitNode": explicit})));
     }
     let node_id = explicit_node.or_else(|| target.node_id.clone());
     Ok((target, node_id))
@@ -525,7 +538,10 @@ fn parse_diff_path(path: &str) -> AppResult<Vec<String>> {
         .collect()
 }
 
-fn node_search(config: &AppConfig, args: &crate::args::NodeSearchArgs) -> AppResult<CommandOutput> {
+async fn node_search(
+    config: &AppConfig,
+    args: &crate::args::NodeSearchArgs,
+) -> AppResult<CommandOutput> {
     if args.name.is_none() && args.text.is_none() && args.node_type.is_none() {
         return Err(AppError::new(
             ErrorCode::InvalidArguments,
@@ -539,22 +555,24 @@ fn node_search(config: &AppConfig, args: &crate::args::NodeSearchArgs) -> AppRes
         .map(normalize_node_id)
         .transpose()?;
     let profile = request_profile(args.geometry);
-    let store = Store::open(&config.data_dir)?;
-    let data = QueryService::new(store).node_search(
-        SnapshotSelector {
-            file_key: target.effective_file_key(),
-            request_profile: profile.key(),
-            snapshot_id: args.snapshot.as_deref(),
-        },
-        &figstash_core::NodeSearchQuery {
-            name: args.name.clone(),
-            text: args.text.clone(),
-            node_type: args.node_type.clone(),
-            ancestor_id: ancestor,
-            limit: args.limit,
-            cursor: args.cursor.clone(),
-        },
-    )?;
+    let store = Store::open(&config.data_dir).await?;
+    let data = QueryService::new(store)
+        .node_search(
+            SnapshotSelector {
+                file_key: target.effective_file_key(),
+                request_profile: profile.key(),
+                snapshot_id: args.snapshot.as_deref(),
+            },
+            &figstash_core::NodeSearchQuery {
+                name: args.name.clone(),
+                text: args.text.clone(),
+                node_type: args.node_type.clone(),
+                ancestor_id: ancestor,
+                limit: args.limit,
+                cursor: args.cursor.clone(),
+            },
+        )
+        .await?;
     local_with_snapshot(&data, &data.snapshot)
 }
 
@@ -699,6 +717,7 @@ mod tests {
         let temporary = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
         let store = Store::open(temporary.path())
+            .await
             .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
         let stage = store
             .create_staging_file()
@@ -732,6 +751,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("whoami output violates its schema: {error}"));
         let quota = store
             .quota_status()
+            .await
             .unwrap_or_else(|error| panic!("quota lookup failed: {error}"));
         assert_eq!(quota.attempted, 1);
         assert_eq!(quota.succeeded, 1);
@@ -742,6 +762,7 @@ mod tests {
         let temporary = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("temporary directory failed: {error}"));
         let store = Store::open(temporary.path())
+            .await
             .unwrap_or_else(|error| panic!("store initialization failed: {error}"));
         let gateway = FigmaGateway::new(FixtureTransport, store.clone(), 10 * 1024 * 1024);
         let credential = Credential::personal_access_token("fixture", CredentialSource::Keyring)
@@ -770,6 +791,7 @@ mod tests {
                 request_profile: RequestProfile::default().key(),
                 snapshot_id: None,
             })
+            .await
             .unwrap_or_else(|error| panic!("snapshot lookup failed: {error}"));
         let node = QueryService::new(store.clone())
             .node_get(NodeGetOptions {
@@ -782,10 +804,12 @@ mod tests {
                 depth: Some(0),
                 view: View::Compact,
             })
+            .await
             .unwrap_or_else(|error| panic!("local query failed: {error}"));
         assert_eq!(node.node["id"], "2:2");
         let quota = store
             .quota_status()
+            .await
             .unwrap_or_else(|error| panic!("quota lookup failed: {error}"));
         assert_eq!(quota.attempted, 1);
         assert_eq!(quota.succeeded, 1);
