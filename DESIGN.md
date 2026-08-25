@@ -913,7 +913,7 @@ GetCurrentUser -> Tier3
 - CLI 与 store schema 分别版本化；二者不共享一个隐式版本号。
 - 使用 Semifold changeset 管理 workspace package 版本与 changelog；每个 member manifest 显式保存自身 `version`，不继承 `workspace.package.version`。`main` 是 base branch，Semifold 管理独立的 `release` branch；禁止将 release branch 指向 `main`。
 - `figstash-core`、`figstash-store`、`figstash-query`、`figstash-figma` 和 `figstash-cli` 均发布到 crates.io；发布只能由 GitHub Actions 中的 Semifold CI 执行。本地和 Agent 环境只允许使用 `cargo publish --dry-run` 与 `cargo package` 验证发布包。
-- 全部 package 使用 `AGPL-3.0-only`，共享仓库、README、关键词和 crates.io category 元数据；cargo-deny 只对这五个 workspace package 设置 AGPL 例外，第三方依赖的许可证 allowlist 不变。内部依赖同时声明本地 `path` 与 registry `version`，由 Semifold 在 release branch 上随 package 版本同步更新。
+- 全部 package 使用 `AGPL-3.0-only`，共享仓库、README、关键词和 crates.io category 元数据；cargo-deny 只对这五个 workspace package 设置 AGPL 例外。第三方依赖许可证使用显式 allowlist，其中允许 OSI 认可、无需署名的 `MIT-0`；新增其他许可证仍须单独审查。内部依赖同时声明本地 `path` 与 registry `version`，由 Semifold 在 release branch 上随 package 版本同步更新。
 - 首次发布按依赖拓扑执行：先发布 `figstash-core`，再发布依赖它的 library crates，最后发布 `figstash-cli`。在 `figstash-core` 尚未进入 crates.io 前，下游 package 的 Cargo dry-run 预期停在 registry dependency lookup；这不允许绕过 Semifold 执行真实本地发布。
 - store migration 使用 Toasty transaction 和 model API 执行；Figstash 保留自己的 migration tracking、checksum、兼容性检查和 destructive migration 前 catalog 备份。
 - 已存在的 `store-v1/catalog.sqlite3`、逻辑表名和数据保持原地兼容；采用 Toasty 不得要求用户重新 pull。

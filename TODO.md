@@ -274,6 +274,7 @@ P0 完成定义：Agent 只使用 shell 和 JSON 就能稳定理解整个已缓�
 - [x] 补齐 crates.io 发布元数据和内部 path dependency 的 registry 版本约束。
 - [x] 使用 Cargo metadata、`cargo package` 与逐 package `cargo publish --dry-run` 验证发布 manifest；首次发布前只有无内部依赖的 `figstash-core` 可完成完整 dry-run，其余 package 在 Cargo 确认字段有效后按预期停在 crates.io 尚无 `figstash-core`。
 - [x] 让 `figstash-cli` 从 crate 内嵌入 CLI schema 发布镜像，并校验其与根目录权威 schema 字节一致；以 `cargo publish --dry-run -p figstash-cli` 验证 package 可独立构建。
+- [x] 审查 Toasty 生产依赖引入的 `MIT-0`，同步 cargo-deny allowlist，并验证与 Security workflow 相同的检查通过。
 - [ ] 保留 GitHub/crates.io 项目名。
 - [ ] 建立 release checklist、SBOM、checksum 和签名策略。
 
