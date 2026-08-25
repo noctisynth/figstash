@@ -19,10 +19,10 @@ keywords = ["figma", "cli", "agents", "design", "offline"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-figstash-core = { version = "0.1.0-alpha.0", path = "crates/figstash-core" }
-figstash-figma = { version = "0.1.0-alpha.0", path = "crates/figstash-figma" }
-figstash-query = { version = "0.1.0-alpha.0", path = "crates/figstash-query" }
-figstash-store = { version = "0.1.0-alpha.0", path = "crates/figstash-store" }
+figstash-core = { version = "0.1.0-alpha.1", path = "crates/figstash-core" }
+figstash-figma = { version = "0.1.0-alpha.1", path = "crates/figstash-figma" }
+figstash-query = { version = "0.1.0-alpha.1", path = "crates/figstash-query" }
+figstash-store = { version = "0.1.0-alpha.1", path = "crates/figstash-store" }
 insta = { version = "1.48.0", default-features = false, features = ["json", "redactions"] }
 
 [workspace.lints.rust]

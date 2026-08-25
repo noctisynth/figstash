@@ -1,5 +1,19 @@
 # Changelog
 
+<!-- semifold:release version=0.1.0-alpha.1 -->
+## v0.1.0-alpha.1
+
+### New Features
+
+- [`f1b8f31`](https://github.com/noctisynth/figstash/commit/f1b8f31a2c7780459104e3e8f44994af0fefba6e): Compare immutable local snapshots with deterministic node and entity change classifications, filters, and zero network access.
+
+### Refactors
+
+- [`053672f`](https://github.com/noctisynth/figstash/commit/053672fa82630c84adaa1b7eb8fb080931a86c5a): Move the durable SQLite catalog to Toasty models and async repository APIs while preserving store-v1 compatibility and raw SQL for SQLite-specific features.
+
+    Raise the workspace MSRV to Rust 1.95, as required by Toasty.
+<!-- semifold:release:end -->
+
 <!-- semifold:release version=0.1.0-alpha.0 -->
 ## v0.1.0-alpha.0
 
